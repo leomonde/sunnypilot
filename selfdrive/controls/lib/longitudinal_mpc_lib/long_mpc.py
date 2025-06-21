@@ -10,8 +10,6 @@ from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.modeld.constants import index_function
 from openpilot.selfdrive.controls.radard import _LEAD_ACCEL_TAU
 
-#from openpilot.sunnypilot.selfdrive.controls.lib.accel_personality.accel_controller import AccelController
-#from openpilot.sunnypilot.selfdrive.controls.lib.dynamic_personality.dynamic_personality_controller import DynamicPersonalityController
 from openpilot.sunnypilot.selfdrive.controls.lib.vibe_personality.vibe_personality import VibePersonalityController
 
 if __name__ == '__main__':  # generating code
@@ -232,8 +230,7 @@ class LongitudinalMpc:
     self.solver = AcadosOcpSolverCython(MODEL_NAME, ACADOS_SOLVER_TYPE, N)
     self.reset()
     self.source = SOURCES[2]
-    #self.accel_controller = AccelController()
-    #self.dynamic_personality_controller = DynamicPersonalityController()
+
     self.vibe_controller = VibePersonalityController()
 
   def reset(self):
@@ -334,10 +331,9 @@ class LongitudinalMpc:
     lead_xv = self.extrapolate_lead(x_lead, v_lead, a_lead, a_lead_tau)
     return lead_xv
 
-  def update(self, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard, dynamic_personality=False):
+  def update(self, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard):
     v_ego = self.x0[1]
     #self.vibe_controller.update()
-    #t_follow = self.vibe_controller.get_follow_distance_multiplier(v_ego) if dynamic_personality else get_T_FOLLOW(personality)
     if self.vibe_controller.is_personality_enabled:
       t_follow = self.vibe_controller.get_follow_distance_multiplier(v_ego)
       print(f"[MPC Debug] Using DYNAMIC t_follow: {t_follow:.3f}s (from vibe controller)")
