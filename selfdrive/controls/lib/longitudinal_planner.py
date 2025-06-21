@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import math
 import numpy as np
+from openpilot.common.params import Params
 import cereal.messaging as messaging
 from opendbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from openpilot.common.conversions import Conversions as CV
@@ -71,6 +72,20 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     self.j_desired_trajectory = np.zeros(CONTROL_N)
     self.solverExecutionTime = 0.0
 
+    self.params = Params()
+    self.param_read_counter = 0
+    self.read_param()
+
+    self.dynamic_personality = False
+
+
+  def read_param(self):
+    try:
+      self.dynamic_personality = self.params.get_bool("DynamicPersonality")
+    except AttributeError:
+      pass
+
+
   @staticmethod
   def parse_model(model_msg, model_error):
     if (len(model_msg.position.x) == ModelConstants.IDX_N and
@@ -123,21 +138,20 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     prev_accel_constraint = not (reset_state or sm['carState'].standstill)
 
     if self.mode == 'acc':
-      accel_clip = [ACCEL_MIN, get_max_accel(v_ego)]
-      steer_angle_without_offset = sm['carState'].steeringAngleDeg - sm['liveParameters'].angleOffsetDeg
-      accel_clip = limit_accel_in_turns(v_ego, steer_angle_without_offset, accel_clip, self.CP)
-    else:
-      accel_clip = [ACCEL_MIN, ACCEL_MAX]
-
-    # Override accel using Accel Controller if enabled
-    if self.accel_controller.is_personality_enabled:
-      max_limit = self.accel_controller._get_max_accel_for_speed(v_ego)
-      if self.mpc.mode == 'acc':
-        # Use the accel controller limits directly
-        accel_clip = [ACCEL_MIN, max_limit]
+      if self.vibe_controller.is_personality_enabled:
+        # Only get max acceleration from vibe controller, use default ACCEL_MIN for minimum
+        max_accel = self.vibe_controller.get_max_accel(v_ego)
+        accel_clip = [ACCEL_MIN, max_accel]
+        print(f"accel_clip: {accel_clip}")
         # Recalculate limit turn according to the new max limit
         steer_angle_without_offset = sm['carState'].steeringAngleDeg - sm['liveParameters'].angleOffsetDeg
         accel_clip = limit_accel_in_turns(v_ego, steer_angle_without_offset, accel_clip, self.CP)
+      else:
+        accel_clip = [ACCEL_MIN, get_max_accel(v_ego)]
+        steer_angle_without_offset = sm['carState'].steeringAngleDeg - sm['liveParameters'].angleOffsetDeg
+        accel_clip = limit_accel_in_turns(v_ego, steer_angle_without_offset, accel_clip, self.CP)
+    else:
+      accel_clip = [ACCEL_MIN, ACCEL_MAX]
 
     if reset_state:
       self.v_desired_filter.x = v_ego
