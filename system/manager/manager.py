@@ -5,7 +5,7 @@ import signal
 import sys
 import traceback
 
-from cereal import log, custom
+from cereal import log
 import cereal.messaging as messaging
 import openpilot.system.sentry as sentry
 from openpilot.common.params import Params, ParamKeyType
@@ -45,7 +45,6 @@ def manager_init() -> None:
   ]
 
   sunnypilot_default_params: list[tuple[str, str | bytes]] = [
-    ("AccelPersonality", str(custom.LongitudinalPlanSP.AccelerationPersonality.stock)),
     ("AutoLaneChangeTimer", "0"),
     ("AutoLaneChangeBsmDelay", "0"),
     ("BlindSpot", "0"),
@@ -59,7 +58,6 @@ def manager_init() -> None:
     ("GasGating", "1"),
     ("HyundaiLongitudinalTuning", "0"),
     ("LagdToggle", "1"),
-    ("DynamicPersonality", "0"),
     ("Mads", "1"),
     ("MadsMainCruiseAllowed", "1"),
     ("MadsSteeringMode", "0"),
@@ -95,6 +93,9 @@ def manager_init() -> None:
     ("SpeedLimitWarningType", "0"),
     ("SpeedLimitWarningOffsetType", "0"),
     ("SpeedLimitWarningValueOffset", "0"),
+    ("VibePersonalityEnabled", "0"),
+    ("VibeAccelPersonalityEnabled", "0"),
+    ("VibeFollowPersonalityEnabled", "0"),
     ("VisionTurnSpeedControl", "0"),
   ]
 

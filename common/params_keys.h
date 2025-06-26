@@ -122,7 +122,6 @@ inline static std::unordered_map<std::string, uint32_t> keys = {
     {"Version", PERSISTENT},
 
     // --- sunnypilot params --- //
-    {"AccelPersonality", PERSISTENT},
     {"ApiCache_DriveStats", PERSISTENT},
     {"AutoLaneChangeBsmDelay", PERSISTENT},
     {"AutoLaneChangeTimer", PERSISTENT},
@@ -135,7 +134,6 @@ inline static std::unordered_map<std::string, uint32_t> keys = {
     {"CustomAccIncrementsEnabled", PERSISTENT | BACKUP},
     {"CustomAccLongPressIncrement", PERSISTENT | BACKUP},
     {"CustomAccShortPressIncrement", PERSISTENT | BACKUP},
-    {"DynamicPersonality", PERSISTENT | BACKUP},
     {"DeviceBootMode", PERSISTENT | BACKUP},
     {"EnableGithubRunner", PERSISTENT | BACKUP},
     {"MaxTimeOffroad", PERSISTENT | BACKUP},
@@ -144,10 +142,6 @@ inline static std::unordered_map<std::string, uint32_t> keys = {
     {"OffroadMode", CLEAR_ON_MANAGER_START},
     {"QuietMode", PERSISTENT | BACKUP},
     {"VisionTurnSpeedControl", PERSISTENT | BACKUP},
-        // TODO - Sort these. Moving down temporarily to resolve CI merge conflict
-    {"CustomAccIncrementsEnabled", PERSISTENT | BACKUP},
-    {"CustomAccLongPressIncrement", PERSISTENT | BACKUP},
-    {"CustomAccShortPressIncrement", PERSISTENT | BACKUP},
 
     // MADS params
     {"Mads", PERSISTENT | BACKUP},
@@ -232,4 +226,8 @@ inline static std::unordered_map<std::string, uint32_t> keys = {
     {"SpeedLimitWarningType", PERSISTENT | BACKUP},
     {"SpeedLimitWarningOffsetType", PERSISTENT | BACKUP},
     {"SpeedLimitWarningValueOffset", PERSISTENT | BACKUP},
+
+    {"VibePersonalityEnabled", PERSISTENT},
+    {"VibeAccelPersonalityEnabled", PERSISTENT},
+    {"VibeFollowPersonalityEnabled", PERSISTENT},
 };

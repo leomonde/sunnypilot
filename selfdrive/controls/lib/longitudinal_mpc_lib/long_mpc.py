@@ -333,16 +333,27 @@ class LongitudinalMpc:
 
   def update(self, radarstate, v_cruise, x, v, a, j, personality=log.LongitudinalPersonality.standard):
     v_ego = self.x0[1]
-    #self.vibe_controller.update()
-    if self.vibe_controller.is_personality_enabled:
+
+    # Get following distance
+    if self.vibe_controller.is_follow_enabled():
       t_follow = self.vibe_controller.get_follow_distance_multiplier(v_ego)
-      print(f"[MPC Debug] Using DYNAMIC t_follow: {t_follow:.3f}s (from vibe controller)")
     else:
       t_follow = get_T_FOLLOW(personality)
-      print(f"[MPC Debug] Using STATIC t_follow: {t_follow:.3f}s (from personality: {personality})")
+
     self.status = radarstate.leadOne.status or radarstate.leadTwo.status
-    min_accel = self.vibe_controller.get_min_accel(v_ego)
+
+    # Get acceleration limits
+    if self.vibe_controller.is_accel_enabled():
+      accel_limits = self.vibe_controller.get_accel_limits(v_ego)
+      if accel_limits is not None:
+        min_accel = accel_limits[0]
+      else:
+        min_accel = CRUISE_MIN_ACCEL
+    else:
+      min_accel = CRUISE_MIN_ACCEL
+
     a_cruise_min = min_accel
+    # You might also want to use max_accel somewhere in your MPC constraints
 
     lead_xv_0 = self.process_lead(radarstate.leadOne)
     lead_xv_1 = self.process_lead(radarstate.leadTwo)
