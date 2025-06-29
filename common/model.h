@@ -1,1 +1,1 @@
-#define DEFAULT_MODEL "Vibe Model (Default)"
+#define DEFAULT_MODEL "Vegetarian Filet o Fish (Default)"
