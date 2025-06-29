@@ -71,9 +71,6 @@ def manager_init() -> None:
     ("ModelManager_ModelsCache", ""),
     ("NeuralNetworkLateralControl", "0"),
     ("QuietMode", "0"),
-    ("CustomAccIncrementsEnabled", "0"),
-    ("CustomAccLongPressIncrement", "5"),
-    ("CustomAccShortPressIncrement", "1"),
 
     # Longitudinal Tuning Live Parameters
     ("LongTuningCustomToggle", "0"),
