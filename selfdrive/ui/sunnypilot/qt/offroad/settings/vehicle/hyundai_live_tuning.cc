@@ -22,7 +22,7 @@ static const std::vector<ParamConfig> PARAM_CONFIGS = {
   {"LongTuningLongitudinalActuatorDelay", QObject::tr("Longitudinal Actuator Delay"), QObject::tr("Delay in which desired commands are executed by your vehicle."), "0.45", 0.3f, 0.5f, 0.01f},
   {"LongTuningMinUpperJerk", QObject::tr("Min Upper Jerk"), QObject::tr("Minimum accel jerk limit (m/s³)"), "0.50", 0.5f, 3.0f, 0.1f},
   {"LongTuningMinLowerJerk", QObject::tr("Min Lower Jerk"), QObject::tr("Minimum braking jerk limit (m/s³)"), "0.50", 0.5f, 5.0f, 0.1f},
-  {"LongTuningJerkLimits", QObject::tr("Jerk Limits"), QObject::tr("Maximum jerk limits the tune cannot exceed (m/s³)"), "4.00", 2.0f, 5.0f, 0.1f},
+  {"LongTuningJerkLimits", QObject::tr("Dynamic Tune Jerk Max"), QObject::tr("Maximum jerk limits the tune cannot exceed (m/s³)"), "4.00", 2.0f, 5.0f, 0.1f},
   {"LongTuningLookaheadJerkBp", QObject::tr("Lookahead Jerk Breakpoints"), QObject::tr("Speed breakpoints for predictive jerk (m/s). Format: 2.0,5.0,20.0"), "2.0,5.0,20.0", 0.0f, 40.0f, 0.0f, true},
   {"LongTuningLookaheadJerkUpperV", QObject::tr("Lookahead Jerk Upper Values"), QObject::tr("Acceleration jerk values for predictive jerk (m/s³). Format: 0.25,0.5,1.0"), "0.25,0.5,1.0", 0.0f, 1.0f, 0.0f, true},
   {"LongTuningLookaheadJerkLowerV", QObject::tr("Lookahead Jerk Lower Values"), QObject::tr("Braking jerk values for predictive jerk (m/s³). Format: 0.05,0.10,0.3"), "0.05,0.10,0.3", 0.0f, 1.0f, 0.0f, true},
