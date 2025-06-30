@@ -97,6 +97,11 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     if dec_mpc_mode := self.get_mpc_mode():
       self.mode = dec_mpc_mode
 
+    if not (self.generation == 11):
+      self.mpc.mode = self.mode
+    else:
+      self.mpc.mode = None
+
     if len(sm['carControl'].orientationNED) == 3:
       accel_coast = get_coast_accel(sm['carControl'].orientationNED[1])
     else:
@@ -183,7 +188,7 @@ class LongitudinalPlanner(LongitudinalPlannerSP):
     output_a_target_e2e = sm['modelV2'].action.desiredAcceleration
     output_should_stop_e2e = sm['modelV2'].action.shouldStop
 
-    if self.mode == 'acc' or not self.gas_gating():
+    if self.mode == 'acc':
       output_a_target = output_a_target_mpc
       self.output_should_stop = output_should_stop_mpc
     else:
