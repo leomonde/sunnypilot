@@ -14,6 +14,7 @@ from openpilot.sunnypilot.selfdrive.controls.lib.accel_personality.accel_control
 from openpilot.sunnypilot.selfdrive.controls.lib.speed_limit_controller.speed_limit_controller import SpeedLimitController
 from openpilot.sunnypilot.selfdrive.selfdrived.events import EventsSP
 from openpilot.sunnypilot.selfdrive.controls.lib.vision_turn_controller import VisionTurnController
+from openpilot.sunnypilot.models.helpers import get_active_bundle
 
 DecState = custom.LongitudinalPlanSP.DynamicExperimentalControl.DynamicExperimentalControlState
 
@@ -23,6 +24,9 @@ class LongitudinalPlannerSP:
     self.events_sp = EventsSP()
 
     self.dec = DynamicExperimentalController(CP, mpc)
+    model_bundle = get_active_bundle()
+    self.generation = model_bundle.generation if model_bundle is not None else None
+
     self.v_tsc = VisionTurnController(CP)
     self._params = Params()
     self.slc = SpeedLimitController(CP)
