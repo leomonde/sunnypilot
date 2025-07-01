@@ -200,6 +200,7 @@ inline static std::unordered_map<std::string, uint32_t> keys = {
 
     // model panel params
     {"LagdToggle", PERSISTENT | BACKUP},
+    {"LagdToggleDesc", PERSISTENT},
     {"GasGating", PERSISTENT | BACKUP},
 
     // mapd
