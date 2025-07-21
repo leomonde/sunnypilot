@@ -50,7 +50,7 @@ def calculate_lka_checksum(dat: bytearray) -> int:
 
 def create_lka_msg(packer, apply_steer: float, steer_direction: int):
   values = {
-    "LKAAngleReq": apply_steer,
+    "LKATorqReq": apply_steer,
     "LKASteerDirection": steer_direction,
     "TrqLim": 0,
 
@@ -60,7 +60,7 @@ def create_lka_msg(packer, apply_steer: float, steer_direction: int):
     "SET_X_10": 0x10, # Test 0x10, 0x1c, 0x18, 0x00
     "SET_X_A4": 0xa7, # Test 0xa4, 0xa6, 0xa5, 0xe5, 0xe7
   }
-  
+
 
   # calculate checksum
   dat = packer.make_can_msg("FSM2", 0, values)[1]
@@ -94,7 +94,7 @@ def create_radar(packer, stock_fsm1):
     "Byte_5",
     "Byte_6",
   )}
-  
+
   values |= {
     "ACC_Distance": 255,
   }

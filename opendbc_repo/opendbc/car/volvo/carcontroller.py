@@ -15,14 +15,6 @@ class CarController(CarControllerBase):
     self.packer_pt = CANPacker(dbc_names[Bus.pt])
     self.frame = 0
 
-    self.apply_steer_prev = 0
-    self.apply_steer_dir_prev = SteerDirection.NONE
-
-    self.latActive_prev = False
-    self.steer_blocked = False
-    self.steer_blocked_cnt = 0
-    self.steer_dir_bf_block = SteerDirection.NONE
-
     # SNG
     self.last_resume_frame = 0
     self.distance = 0
@@ -38,72 +30,30 @@ class CarController(CarControllerBase):
     actuators = CC.actuators
     pcm_cancel_cmd = CC.cruiseControl.cancel
 
-    apply_torque = 0
-    steer_max = round(float(np.interp(CS.out.vEgoRaw, CarControllerParams.STEER_MAX_LOOKUP[0], CarControllerParams.STEER_MAX_LOOKUP[1])))
-
     # Cancel ACC if engaged when OP is not, but only above minimum steering speed.
     # TODO: is this check needed? it might trying to fix broken standstill behavior
     if pcm_cancel_cmd and CS.out.vEgo > self.CP.minSteerSpeed:
       can_sends.append(create_button_msg(self.packer_pt, cancel=True))
 
-    # run at 50hz
-    if self.frame % 2 == 0:
+    if self.frame % CarControllerParams.STEER_STEP == 0:
       if CC.latActive and CS.out.vEgo > self.CP.minSteerSpeed:
-        #apply_steer = apply_std_steer_angle_limits(actuators.steeringAngleDeg, self.apply_steer_prev, CS.out.vEgoRaw, CS.out.steeringAngleDeg, CC.latActive, CarControllerParams.ANGLE_LIMITS)
-        
-        new_torque = int(round(CC.actuators.torque * steer_max))
-        apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorqueEps, CarControllerParams, steer_max)        
-
-        #apply_steer_dir = SteerDirection.LEFT if apply_steer > 0 else SteerDirection.RIGHT
+        # calculate steer and also set limits due to driver torque
+        new_torque = int(round(actuators.torque * CarControllerParams.STEER_MAX))
+        apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorque, CarControllerParams)
         apply_steer_dir = SteerDirection.LEFT if apply_torque > 0 else SteerDirection.RIGHT
-
-        #error = CS.out.steeringAngleDeg - apply_steer
-        error = CS.out.steeringAngleDeg - apply_torque
-        error_with_deadzone = 0 if abs(error) < CarControllerParams.DEADZONE else error
-
-        # Update prev with desired if just enabled.
-        if not self.latActive_prev:
-          self.apply_steer_dir_prev = apply_steer_dir
-
-        if self.steer_blocked:
-          if (apply_steer_dir == self.steer_dir_bf_block) or (self.steer_blocked_cnt <= 0) or (error_with_deadzone == 0):
-            self.steer_blocked = False
-        else:
-          if apply_steer_dir != self.apply_steer_dir_prev and error_with_deadzone != 0:
-            self.steer_blocked = True
-            self.steer_blocked_cnt = CarControllerParams.BLOCK_LEN
-            self.steer_dir_bf_block = self.apply_steer_dir_prev
-
-        if self.steer_blocked:
-          self.steer_blocked_cnt -= 1
-          apply_steer_dir = SteerDirection.NONE
-        elif error_with_deadzone == 0:
-          # Set old request when inside deadzone
-          apply_steer_dir = self.apply_steer_dir_prev
-
       else:
-        #apply_steer = 0
         apply_torque = 0
         apply_steer_dir = SteerDirection.NONE
 
-      #can_sends.append(create_lka_msg(self.packer_pt, apply_steer, int(apply_steer_dir)))
-      can_sends.append(create_lka_msg(self.packer_pt, apply_torque, int(apply_steer_dir)))
-
-      #self.apply_steer_prev = apply_steer
       self.apply_torque_last = apply_torque
-      self.apply_steer_dir_prev = apply_steer_dir
-      self.latActive_prev = CC.latActive
-
-      # Manipulate data from servo to FSM
-      # Avoids faults that will stop servo from accepting steering commands.
-      can_sends.append(create_lkas_state_msg(self.packer_pt, CS.out.steeringAngleDeg, CS.pscm_stock_values))
+      can_sends.append(create_lka_msg(self.packer_pt, apply_torque, int(apply_steer_dir)))
 
     # Longitudinal control
     if self.CP.openpilotLongitudinalControl:
       accel = float(np.clip(actuators.accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
       can_sends.append(create_longitudinal(self.packer_pt, CS.stock_FSM3, accel, CS.ACC_Check))
       can_sends.append(create_radar(self.packer_pt, CS.stock_FSM1))
-    
+
     # SNG
     # wait 100 cycles since last resume sent
     if (self.frame - self.last_resume_frame) * DT_CTRL > 1.00:
@@ -123,9 +73,8 @@ class CarController(CarControllerBase):
         self.last_resume_frame = self.frame
 
     new_actuators = actuators.as_builder()
-    #new_actuators.steeringAngleDeg = self.apply_steer_prev
-    new_actuators.torque = apply_torque / steer_max
-    new_actuators.torqueOutputCan = apply_torque
+    new_actuators.torque = self.apply_torque_last / CarControllerParams.STEER_MAX
+    new_actuators.torqueOutputCan = self.apply_torque_last
 
     self.frame += 1
     return new_actuators, can_sends

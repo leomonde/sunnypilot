@@ -55,38 +55,17 @@ class SteerDirection(IntEnum):
 
 
 class CarControllerParams:
-  # EUCD: Torque limit for steering is 50 CAN units
-  ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(90,  # deg, reasonable limit
-    ([0., 5., 15.], [5., .8, .15]),
-    ([0., 5., 15.], [5., 3.5, 0.4]),
-  )
-
-  # Temporary steer fault timeout
-  # Maximum time to continuously read 0 torque from EPS
-  STEER_TIMEOUT = 30 / DT_CTRL
-
-  # EUCD
-  # When changing steer direction steering request need to be blocked.
-  # Otherwise servo won't "listen" to the request.
-  # This calibration sets the number of samples to block steering request.
-  BLOCK_LEN = 8
-  # When close to desired steering angle, don't change steer direction inside deadzone.
-  # Since we need to release control of the steering wheel for a brief moment, steering wheel will
-  # unwind by itself.
-  DEADZONE = 0.2
-
-  ACCEL_MIN = -4.0  # m/s^2
-  ACCEL_MAX = 2.0  # m/s^2
-
-  STEER_MAX = 250  # 350 is intended to maintain lateral accel, not increase it
-  STEER_MAX_LOOKUP = [9, 17], [350, 250]
-  STEER_STEP = 1
-  STEER_DELTA_UP = 3  # torque increase per refresh
-  STEER_DELTA_DOWN = 5  # torque decrease per refresh
+  STEER_STEP = 2
+  STEER_MAX = 250
+  STEER_DELTA_UP = 15    # torque increase per refresh
+  STEER_DELTA_DOWN = 10  # torque decrease per refresh
   STEER_DRIVER_ALLOWANCE = 100  # allowed driver torque before start limiting
   STEER_DRIVER_MULTIPLIER = 2  # weight driver torque
   STEER_DRIVER_FACTOR = 100
-  
+
+  ACCEL_MIN = -3.5  # m/s^2
+  ACCEL_MAX = 2.0  # m/s^2
+
   def __init__(self, CP):
     can_define = CANDefine(DBC[CP.carFingerprint][Bus.pt])
     #pass
