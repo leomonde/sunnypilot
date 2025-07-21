@@ -152,7 +152,7 @@ BO_ 609 fromWhere: 8 XXX
 BO_ 610 FSM2: 8 FSM
  SG_ SET_X_22 : 15|8@0+ (1,0) [0|255] "" XXX
  SG_ TrqLim : 23|8@0+ (1,-128) [0|255] "" PSCM
- SG_ LKAAngleReq : 29|14@0+ (0.04,-327.68) [0|16383] "" PSCM
+ SG_ LKATorqReq : 29|14@0+ (0.04,-327.68) [0|16383] "" PSCM
  SG_ SET_X_02 : 31|2@0+ (1,0) [0|3] "" XXX
  SG_ LKASteerDirection : 41|2@0+ (1,0) [0|3] "" PSCM
  SG_ SET_X_10 : 47|6@0+ (1,0) [0|63] "" XXX

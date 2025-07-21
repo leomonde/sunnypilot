@@ -50,7 +50,7 @@ def calculate_lka_checksum(dat: bytearray) -> int:
 
 def create_lka_msg(packer, apply_steer: float, steer_direction: int):
   values = {
-    "LKAAngleReq": apply_steer,
+    "LKATorqReq": apply_steer,
     "LKASteerDirection": steer_direction,
     "TrqLim": 0,
 

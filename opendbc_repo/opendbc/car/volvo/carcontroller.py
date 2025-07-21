@@ -38,26 +38,23 @@ class CarController(CarControllerBase):
     actuators = CC.actuators
     pcm_cancel_cmd = CC.cruiseControl.cancel
 
-    apply_torque = 0
-    steer_max = round(float(np.interp(CS.out.vEgoRaw, CarControllerParams.STEER_MAX_LOOKUP[0], CarControllerParams.STEER_MAX_LOOKUP[1])))
+    #apply_torque = 0
+    #steer_max = round(float(np.interp(CS.out.vEgoRaw, CarControllerParams.STEER_MAX_LOOKUP[0], CarControllerParams.STEER_MAX_LOOKUP[1])))
 
     # Cancel ACC if engaged when OP is not, but only above minimum steering speed.
     # TODO: is this check needed? it might trying to fix broken standstill behavior
     if pcm_cancel_cmd and CS.out.vEgo > self.CP.minSteerSpeed:
       can_sends.append(create_button_msg(self.packer_pt, cancel=True))
 
-    # run at 50hz
-    if self.frame % 2 == 0:
+    if self.frame % CarControllerParams.STEER_STEP == 0:
       if CC.latActive and CS.out.vEgo > self.CP.minSteerSpeed:
-        #apply_steer = apply_std_steer_angle_limits(actuators.steeringAngleDeg, self.apply_steer_prev, CS.out.vEgoRaw, CS.out.steeringAngleDeg, CC.latActive, CarControllerParams.ANGLE_LIMITS)
+        # calculate steer and also set limits due to driver torque
         
-        new_torque = int(round(CC.actuators.torque * steer_max))
-        apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorqueEps, CarControllerParams, steer_max)        
+        new_torque = int(round(actuators.torque * CarControllerParams.STEER_MAX))
+        apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorque, CarControllerParams)
 
-        #apply_steer_dir = SteerDirection.LEFT if apply_steer > 0 else SteerDirection.RIGHT
         apply_steer_dir = SteerDirection.LEFT if apply_torque > 0 else SteerDirection.RIGHT
 
-        #error = CS.out.steeringAngleDeg - apply_steer
         error = CS.out.steeringAngleDeg - apply_torque
         error_with_deadzone = 0 if abs(error) < CarControllerParams.DEADZONE else error
 
@@ -82,15 +79,12 @@ class CarController(CarControllerBase):
           apply_steer_dir = self.apply_steer_dir_prev
 
       else:
-        #apply_steer = 0
         apply_torque = 0
         apply_steer_dir = SteerDirection.NONE
 
-      #can_sends.append(create_lka_msg(self.packer_pt, apply_steer, int(apply_steer_dir)))
+      self.apply_torque_last = apply_torque
       can_sends.append(create_lka_msg(self.packer_pt, apply_torque, int(apply_steer_dir)))
 
-      #self.apply_steer_prev = apply_steer
-      self.apply_torque_last = apply_torque
       self.apply_steer_dir_prev = apply_steer_dir
       self.latActive_prev = CC.latActive
 
@@ -123,9 +117,8 @@ class CarController(CarControllerBase):
         self.last_resume_frame = self.frame
 
     new_actuators = actuators.as_builder()
-    #new_actuators.steeringAngleDeg = self.apply_steer_prev
-    new_actuators.torque = apply_torque / steer_max
-    new_actuators.torqueOutputCan = apply_torque
+    new_actuators.torque = self.apply_torque_last / CarControllerParams.STEER_MAX
+    new_actuators.torqueOutputCan = self.apply_torque_last
 
     self.frame += 1
     return new_actuators, can_sends
