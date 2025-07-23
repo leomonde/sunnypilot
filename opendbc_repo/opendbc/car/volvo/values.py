@@ -70,7 +70,7 @@ class CarControllerParams:
   DEADZONE = 0.2
 
   STEER_STEP = 2
-  STEER_MAX = 250
+  STEER_MAX = 500
   STEER_DELTA_UP = 15    # torque increase per refresh
   STEER_DELTA_DOWN = 10  # torque decrease per refresh
   STEER_DRIVER_ALLOWANCE = 100  # allowed driver torque before start limiting
