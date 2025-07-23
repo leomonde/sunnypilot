@@ -71,8 +71,8 @@ class CarControllerParams:
 
   STEER_STEP = 2
   STEER_MAX = 1000
-  STEER_DELTA_UP = 30    # torque increase per refresh 15 default
-  STEER_DELTA_DOWN = 20  # torque decrease per refresh 10 default
+  STEER_DELTA_UP = 10    # torque increase per refresh 15 default
+  STEER_DELTA_DOWN = 10  # torque decrease per refresh 10 default
   STEER_DRIVER_ALLOWANCE = 100  # allowed driver torque before start limiting
   STEER_DRIVER_MULTIPLIER = 2  # weight driver torque
   STEER_DRIVER_FACTOR = 100
