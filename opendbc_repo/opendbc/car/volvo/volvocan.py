@@ -87,7 +87,7 @@ def create_longitudinal(packer, stock_fsm3, accel, acc_check):
 
 def create_radar(packer, stock_fsm1):
   values = {s: stock_fsm1[s] for s in (
-    "Byte_1",
+    #"Byte_1",
     "Byte_2",
     "Byte_3",
     "Byte_4",
@@ -97,6 +97,7 @@ def create_radar(packer, stock_fsm1):
   
   values |= {
     "ACC_Distance": 255,
+    "Byte_1": 255,
   }
 
   return packer.make_can_msg("FSM1", 0, values)
