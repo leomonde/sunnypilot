@@ -21,6 +21,7 @@
 static const CanMsg VOLVO_EUCD_TX_MSGS[] = {
     {VOLVO_EUCD_CCButtons, VOLVO_MAIN_BUS, 8, .check_relay = false},
     {VOLVO_EUCD_PSCM1,     VOLVO_CAM_BUS,  8, .check_relay = true},
+    {VOLVO_EUCD_FSM0,      VOLVO_MAIN_BUS, 8, .check_relay = true},
     {VOLVO_EUCD_FSM1,      VOLVO_MAIN_BUS, 8, .check_relay = true},
     {VOLVO_EUCD_FSM2,      VOLVO_MAIN_BUS, 8, .check_relay = true},
     {VOLVO_EUCD_FSM3,      VOLVO_MAIN_BUS, 8, .check_relay = true}
