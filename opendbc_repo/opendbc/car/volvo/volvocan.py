@@ -104,22 +104,21 @@ def create_radar(packer, stock_fsm1):
 def create_ACC(packer, stock_fsm0):
   values = {s: stock_fsm0[s] for s in (
     "Byte_0",
+    "Byte_1",
     "ACC_Available",
     "ACC_Enabled",
+    "Byte_2",
     "Byte_31",
     "Byte_32",
     "ACC_BrakeAlert",
     "Byte_4",
+    "Byte_5",
     "Byte_6",
     "Byte_7",
   )}
   
   values |= {
     "ACC_FrontCar": 0,
-    # Values registered from stock FSM when missing ahead car
-    "Byte_2": 16,
-    "Byte_1": 99,
-    "Byte_5": 149,
   }
 
   return packer.make_can_msg("FSM0", 0, values)
