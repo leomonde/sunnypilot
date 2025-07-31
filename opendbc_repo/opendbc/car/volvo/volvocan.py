@@ -73,7 +73,6 @@ def create_longitudinal(packer, stock_fsm3, accel, acc_check):
     "Byte_01",
     "Byte_02",
     "Byte_2",
-    "Byte_3",
     "Byte_4",
     "Byte_5",
   )}
@@ -81,6 +80,7 @@ def create_longitudinal(packer, stock_fsm3, accel, acc_check):
   values |= {
     "ACC_AccelerationRequest": accel,
     "ACC_Check": acc_check,
+    "Byte_3": 0,
   }
 
   return packer.make_can_msg("FSM3", 0, values)
