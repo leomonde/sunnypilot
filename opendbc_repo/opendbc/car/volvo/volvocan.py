@@ -56,7 +56,7 @@ def create_lka_msg(packer, apply_steer: float, steer_direction: int):
 
     # car specific parameters
     "SET_X_22": 0x25, # Test these values: 0x24, 0x22
-    "SET_X_02": 0x00, # Test 0x00, 0x02
+    "SET_X_02": 0,    # Test 0x00, 0x02
     "SET_X_10": 0x10, # Test 0x10, 0x1c, 0x18, 0x00
     "SET_X_A4": 0xa7, # Test 0xa4, 0xa6, 0xa5, 0xe5, 0xe7
   }
@@ -87,6 +87,7 @@ def create_longitudinal(packer, stock_fsm3, accel, acc_check):
 
 def create_radar(packer, stock_fsm1):
   values = {s: stock_fsm1[s] for s in (
+    #"Byte_1",
     "Byte_2",
     "Byte_3",
     "Byte_4",
@@ -100,25 +101,3 @@ def create_radar(packer, stock_fsm1):
   }
 
   return packer.make_can_msg("FSM1", 0, values)
-
-def create_ACC(packer, stock_fsm0):
-  values = {s: stock_fsm0[s] for s in (
-    "Byte_0",
-    "Byte_1",
-    "ACC_Available",
-    "ACC_Enabled",
-    "Byte_2",
-    "Byte_31",
-    "Byte_32",
-    "ACC_BrakeAlert",
-    "Byte_4",
-    "Byte_5",
-    "Byte_6",
-    "Byte_7",
-  )}
-  
-  values |= {
-    "ACC_FrontCar": 0,
-  }
-
-  return packer.make_can_msg("FSM0", 0, values)

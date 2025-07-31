@@ -93,7 +93,6 @@ class CarState(CarStateBase):
     self.pscm_stock_values = pt_cp.vl["PSCM1"]
 
     # Messages forwarded for oplong and radar
-    self.stock_FSM0 = copy.copy(cam_cp.vl["FSM0"])
     self.stock_FSM1 = copy.copy(cam_cp.vl["FSM1"])
     self.stock_FSM3 = copy.copy(cam_cp.vl["FSM3"])
     self.ACC_Check = cam_cp.vl["FSM3"]["ACC_Check"]

@@ -4,7 +4,7 @@ from openpilot.common.realtime import DT_CTRL
 from opendbc.car import Bus, apply_std_steer_angle_limits
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.volvo.values import CANBUS, CarControllerParams, SteerDirection
-from opendbc.car.volvo.volvocan import create_button_msg, create_lka_msg, create_lkas_state_msg, create_longitudinal, create_radar, create_ACC
+from opendbc.car.volvo.volvocan import create_button_msg, create_lka_msg, create_lkas_state_msg, create_longitudinal, create_radar
 
 
 class CarController(CarControllerBase):
@@ -90,7 +90,6 @@ class CarController(CarControllerBase):
       accel = float(np.clip(actuators.accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
       can_sends.append(create_longitudinal(self.packer_pt, CS.stock_FSM3, accel, CS.ACC_Check))
       can_sends.append(create_radar(self.packer_pt, CS.stock_FSM1))
-      can_sends.append(create_ACC(self.packer_pt, CS.stock_FSM0))
     
     # SNG
     # wait 100 cycles since last resume sent
