@@ -122,15 +122,13 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         self.waiting = True
         self.sng_count = 0
 
-      # Trigger resume only on lead moving. The prior "op_wants_go" debounce
-      # (0.5s of planner accel > 0.3) was a workaround for OP not having a
-      # radar feed — it caused the car to resume before the lead actually
-      # pulled away and stock ACC cancelled mid-take-off (drive 0000003e seg 7).
-      # With the Delphi ESR wired up, the planner sees real leads and
-      # ACC_Distance flags stock's take-off the same instant stock sees it.
+      # Trigger resume on lead moving OR on planner clearing shouldStop (green
+      # light / stop sign cleared in experimental mode). CC.cruiseControl.resume
+      # is True when OP is engaged, car is at standstill, and shouldStop → False.
       lead_moved = CS.acc_distance > self.distance
+      e2e_resume = CC.cruiseControl.resume
 
-      if at_standstill and self.waiting and lead_moved:
+      if at_standstill and self.waiting and (lead_moved or e2e_resume):
         # send 25 messages at a time to increases the likelihood of resume being accepted
         can_sends.extend([volvocan.create_button_msg(self.packer_pt, resume=True)] * 25)
         if self.CP.openpilotLongitudinalControl:
