@@ -1,10 +1,14 @@
-def create_button_msg(packer, resume=False, cancel=False, bus=0):
+def create_button_msg(packer, resume=False, cancel=False, set_plus=False, minus=False, bus=0):
   # TODO: validate
   msg = {
     "ACCOnOffBtn": cancel,
     "ACCOnOffBtnInv": not cancel,
     "ACCResumeBtn": resume,
     "ACCResumeBtnInv": not resume,
+    "ACCSetBtn": set_plus,
+    "ACCSetBtnInv": not set_plus,
+    "ACCMinusBtn": minus,
+    "ACCMinusBtnInv": not minus,
   }
   return packer.make_can_msg("CCButtons", bus, msg)
 

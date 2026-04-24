@@ -6,11 +6,13 @@ from opendbc.car.lateral import apply_std_steer_angle_limits
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.volvo import volvocan
 from opendbc.car.volvo.values import CANBUS, CarControllerParams, SteerDirection
+from opendbc.sunnypilot.car.volvo.icbm import IntelligentCruiseButtonManagementInterface
 
 
-class CarController(CarControllerBase):
+class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterface):
   def __init__(self, dbc_names, CP, CP_SP):
-    super().__init__(dbc_names, CP, CP_SP)
+    CarControllerBase.__init__(self, dbc_names, CP, CP_SP)
+    IntelligentCruiseButtonManagementInterface.__init__(self, CP, CP_SP)
     self.CP = CP
     self.CCP = CarControllerParams(CP)
     self.packer_pt = CANPacker(dbc_names[Bus.pt])
@@ -216,6 +218,9 @@ class CarController(CarControllerBase):
     # FSM3/FSM1 are TX'd together inside long_tx_due so they stay in the
     # same bus frame and share the 50Hz cadence.
 
+
+    # Intelligent Cruise Button Management
+    can_sends.extend(IntelligentCruiseButtonManagementInterface.update(self, CC_SP, self.packer_pt, self.frame, self.last_button_frame))
 
     new_actuators = actuators.as_builder()
     new_actuators.steeringAngleDeg = self.apply_steer_prev
