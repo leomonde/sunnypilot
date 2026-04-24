@@ -97,6 +97,10 @@ class CarState(CarStateBase):
     self.stock_FSM3 = copy.copy(cam_cp.vl["FSM3"])
     self.ACC_Check = cam_cp.vl["FSM3"]["ACC_Check"]
 
+    # Traffic Sign Recognition speed limit (FSM5, 0 = no sign detected)
+    tsr_raw = cam_cp.vl["FSM5"]["TSR_Speed"]
+    ret_sp.speedLimit = tsr_raw * CV.KPH_TO_MS if tsr_raw > 0 else 0.0
+
     self.frame += 1
     return ret, ret_sp
 
@@ -118,6 +122,7 @@ class CarState(CarStateBase):
       ("FSM0", 100),
       ("FSM1", 50),
       ("FSM3", 50),
+      ("FSM5", 10),
     ]
 
     return {
