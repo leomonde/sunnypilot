@@ -41,7 +41,7 @@ class CarState(CarStateBase):
     if self.steeringDirection:
       ret.steeringTorque = -abs(ret.steeringTorque)
     ret.steeringTorqueEps = pt_cp.vl["PSCM1"]["LKATorque"]
-    ret.steeringPressed = False
+    ret.steeringPressed = abs(ret.steeringTorque) > 50
 
     # cruise state
     ret.cruiseState.speed = pt_cp.vl["ACC_Speed"]["ACC_Speed"] * CV.KPH_TO_MS
