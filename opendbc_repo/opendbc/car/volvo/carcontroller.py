@@ -150,68 +150,60 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         self.waiting = False
         self.last_resume_frame = self.frame
 
-    # Longitudinal: only TX when OP is actively controlling (longActive).
-    # Panda's fwd hook now unblocks stock FSM1/FSM3 when !gas_pressed, so
-    # during gas overrides stock flows through naturally and there's no
-    # starvation even though OP isn't TXing. When longActive flickers False
-    # due to gas press, OP withdraws from the bus entirely and the car
-    # sees stock's real-time FSM3 — matching pre-OP-long behavior.
-    #
-    # Rate gating: wall-clock 20ms minimum between TXs, so controlsd jitter
-    # can't produce the 10ms bursts leomonde spotted. If we're late we still
-    # TX once and slide the next-allowed forward by one period (no catch-up
-    # burst).
-    long_tx_due = self.CP.openpilotLongitudinalControl and CC.longActive and now_nanos >= self.next_long_tx_nanos
+    # FSM3/FSM1 TX: always at 50Hz wall-clock, regardless of whether OP long
+    # is enabled. When OP long is active, send OP's accel values. Otherwise,
+    # pass through stock cam-bus values verbatim so the car's ECU never sees
+    # silence on these IDs — which causes faults when panda's fwd hook does
+    # not forward them (observed with alpha long disabled).
+    long_tx_due = now_nanos >= self.next_long_tx_nanos
     if long_tx_due:
       # Advance target by exactly one period. If we'd already be past the
-      # advanced time (first TX after longActive gap, or controlsd stalled
-      # for >1 period), resync to avoid a burst of catch-up TXs.
+      # advanced time (first TX after a long gap or controlsd stall),
+      # resync to avoid a burst of catch-up TXs.
       next_tx = self.next_long_tx_nanos + self.LONG_TX_PERIOD_NANOS
       if self.next_long_tx_nanos == 0 or next_tx <= now_nanos:
         next_tx = now_nanos + self.LONG_TX_PERIOD_NANOS
       self.next_long_tx_nanos = next_tx
 
-      op_accel = float(np.clip(actuators.accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
+      if self.CP.openpilotLongitudinalControl and CC.longActive:
+        op_accel = float(np.clip(actuators.accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
 
-      # Take-off passthrough: after a SNG resume blast, while still rolling
-      # below 5 m/s, defer to stock's ACC_AccelerationRequest when stock
-      # wants MORE positive accel than OP. Stock's take-off ramp was
-      # commanding +0.88 m/s² in drive 0000042 seg 3 while OP only wanted
-      # +0.62; the car lagged stock's expected response profile and stock
-      # cancelled 0.3s into the takeoff. Mirroring stock's value (when
-      # higher) keeps stock's state machine satisfied. OP takes back over
-      # once cruising above 5 m/s.
-      #
-      # Previously we gated on a 3s time window starting from the resume
-      # blast, but that window expired mid-takeoff when the resume hit near
-      # a segment boundary (drive 0000042 seg 2→3). vEgo threshold is a
-      # more reliable trigger.
-      #
-      # Direction guard: only passes stock's POSITIVE accel. If OP wants to
-      # brake during the takeoff (e.g. lead suddenly stopped), OP's value
-      # drives — OP sees the lead via radar, stock's brake authority via
-      # FSM3 is weak on this car anyway.
-      takeoff_elapsed = (self.frame - self.takeoff_start_frame) * DT_CTRL
-      stock_accel = float(CS.stock_FSM3["ACC_AccelerationRequest"])
-      # 15s ceiling is a safety belt in case vEgo never crosses 5 (crawl
-      # traffic) — eventually snap back to OP so runaway stock commands
-      # can't persist indefinitely.
-      in_takeoff_window = takeoff_elapsed < 15.0 and CS.out.vEgo < 5.0
-      if in_takeoff_window and stock_accel > op_accel and stock_accel > 0:
-        accel = stock_accel
+        # Take-off passthrough: after a SNG resume blast, while still rolling
+        # below 5 m/s, defer to stock's ACC_AccelerationRequest when stock
+        # wants MORE positive accel than OP. Stock's take-off ramp was
+        # commanding +0.88 m/s² in drive 0000042 seg 3 while OP only wanted
+        # +0.62; the car lagged stock's expected response profile and stock
+        # cancelled 0.3s into the takeoff. Mirroring stock's value (when
+        # higher) keeps stock's state machine satisfied. OP takes back over
+        # once cruising above 5 m/s.
+        #
+        # Direction guard: only passes stock's POSITIVE accel. If OP wants to
+        # brake during the takeoff (e.g. lead suddenly stopped), OP's value
+        # drives — OP sees the lead via radar, stock's brake authority via
+        # FSM3 is weak on this car anyway.
+        takeoff_elapsed = (self.frame - self.takeoff_start_frame) * DT_CTRL
+        stock_accel = float(CS.stock_FSM3["ACC_AccelerationRequest"])
+        # 15s ceiling: snap back to OP in crawl traffic so runaway stock
+        # commands can't persist indefinitely.
+        in_takeoff_window = takeoff_elapsed < 15.0 and CS.out.vEgo < 5.0
+        if in_takeoff_window and stock_accel > op_accel and stock_accel > 0:
+          accel = stock_accel
+        else:
+          accel = op_accel
+
+        # ACC_Check: 1 only during the post-resume acknowledgement window
+        # (set by the SNG block above), else 0.
+        acc_check = 1 if self.sng_ack_frames > 0 else 0
+        if self.sng_ack_frames > 0:
+          self.sng_ack_frames -= 1
       else:
-        accel = op_accel
-
-      # ACC_Check: 1 only during the post-resume acknowledgement window
-      # (set by the SNG block above), else 0. Copying stock's ACC_Check —
-      # as we were doing — left it at 0 almost always, so SNG resumes
-      # worked only when the stock cam-bus value happened to flip in time.
-      acc_check = 1 if self.sng_ack_frames > 0 else 0
-      if self.sng_ack_frames > 0:
-        self.sng_ack_frames -= 1
+        # OP long disabled or inactive: relay stock FSM3 values verbatim so
+        # the ECU receives a continuous stream and does not fault.
+        accel = float(CS.stock_FSM3["ACC_AccelerationRequest"])
+        acc_check = int(CS.stock_FSM3["ACC_Check"])
 
       can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, accel, acc_check))
-      can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, True))
+      can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, CC.longActive))
 
     # FSM3/FSM1 are TX'd together inside long_tx_due so they stay in the
     # same bus frame and share the 50Hz cadence.
