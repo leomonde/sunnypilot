@@ -40,8 +40,8 @@ class IntelligentCruiseButtonManagementInterface(IntelligentCruiseButtonManageme
     send = self.ICBM.sendButton
 
     if send != SendButtonState.none:
-      v_target_kph = self.ICBM.vTarget * CV.MS_TO_KPH
-      floor_target_kph = int(v_target_kph // ACC_STEP_KMH) * ACC_STEP_KMH
+      # vTarget is already in km/h (set by controller.py after MS_TO_KPH conversion)
+      floor_target_kph = int(self.ICBM.vTarget // ACC_STEP_KMH) * ACC_STEP_KMH
       cruise_kph = round(CS.out.cruiseState.speedCluster * CV.MS_TO_KPH)
 
       if send == SendButtonState.increase and cruise_kph >= floor_target_kph:
