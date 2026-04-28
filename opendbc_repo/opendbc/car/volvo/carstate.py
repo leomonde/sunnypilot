@@ -6,6 +6,8 @@ from opendbc.car.interfaces import CarStateBase
 from opendbc.car.volvo.values import CarControllerParams, DBC, CANBUS
 from opendbc.car import Bus, structs
 
+ButtonType = structs.CarState.ButtonEvent.Type
+
 
 class CarState(CarStateBase):
   def __init__(self, CP, CP_SP):
@@ -13,6 +15,7 @@ class CarState(CarStateBase):
     self.cruiseState_enabled_prev = False
     self.eps_torque_timer = 0
     self.frame = 0
+    self._cruise_speed_prev_kph = 0
 
   def update(self, can_parsers) -> structs.CarState:
     pt_cp = can_parsers[Bus.pt]
@@ -45,6 +48,7 @@ class CarState(CarStateBase):
 
     # cruise state
     ret.cruiseState.speed = pt_cp.vl["ACC_Speed"]["ACC_Speed"] * CV.KPH_TO_MS
+    ret.cruiseState.speedCluster = ret.cruiseState.speed
     ret.cruiseState.available = bool(cam_cp.vl["FSM0"]["ACC_Available"])
     ret.cruiseState.enabled = bool(cam_cp.vl["FSM0"]["ACC_Enabled"])
     # ACC_Standstill bit = 1 when Volvo's ACC is holding the car at 0 km/h
@@ -84,6 +88,19 @@ class CarState(CarStateBase):
     # button presses
     ret.leftBlinker = pt_cp.vl["MiscCarInfo"]["TurnSignal"] == 1
     ret.rightBlinker = pt_cp.vl["MiscCarInfo"]["TurnSignal"] == 3
+
+    # Synthesize cruise buttonEvents from ACC_Speed changes so OP's v_cruise
+    # tracks the car's setpoint. Volvo steps 5 km/h per press; emit one event
+    # per km/h of delta so controlsd increments v_cruise by the full amount.
+    # Guard: skip the activation frame (prev=0) and standstill transitions.
+    cruise_kph_now = round(ret.cruiseState.speed * CV.MS_TO_KPH)
+    if ret.cruiseState.enabled and self.cruiseState_enabled_prev:
+      delta = cruise_kph_now - self._cruise_speed_prev_kph
+      if delta > 0:
+        ret.buttonEvents = [structs.CarState.ButtonEvent(pressed=False, type=ButtonType.accelCruise)] * min(delta, 10)
+      elif delta < 0:
+        ret.buttonEvents = [structs.CarState.ButtonEvent(pressed=False, type=ButtonType.decelCruise)] * min(-delta, 10)
+    self._cruise_speed_prev_kph = cruise_kph_now
 
     # lock info
     ret.doorOpen = not all([pt_cp.vl["Doors"]["DriverDoorClosed"], pt_cp.vl["Doors"]["PassengerDoorClosed"]])
