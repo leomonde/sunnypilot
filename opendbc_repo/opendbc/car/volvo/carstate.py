@@ -16,6 +16,7 @@ class CarState(CarStateBase):
     self.eps_torque_timer = 0
     self.frame = 0
     self._cruise_speed_prev_kph = 0
+    self._pending_delta = 0
 
   def update(self, can_parsers) -> structs.CarState:
     pt_cp = can_parsers[Bus.pt]
@@ -91,16 +92,22 @@ class CarState(CarStateBase):
 
     # Synthesize cruise buttonEvents from ACC_Speed changes so OP's v_cruise
     # tracks the car's setpoint. Volvo steps 5 km/h per press; emit one event
-    # per km/h of delta so controlsd increments v_cruise by the full amount.
-    # Guard: skip the activation frame (prev=0) and standstill transitions.
+    # per frame from a pending delta so each frame's non-pcm cruise loop
+    # processes one increment — all 5 events consumed across 5 frames instead
+    # of 5 arriving at once with only 1 processed (the loop breaks after first).
+    # The ICBM preActive timer (0.4 s) ensures ICBM doesn't act before v_cruise
+    # converges.
     cruise_kph_now = round(ret.cruiseState.speed * CV.MS_TO_KPH)
     if ret.cruiseState.enabled and self.cruiseState_enabled_prev:
-      delta = cruise_kph_now - self._cruise_speed_prev_kph
-      if delta > 0:
-        ret.buttonEvents = [structs.CarState.ButtonEvent(pressed=False, type=ButtonType.accelCruise)] * min(delta, 10)
-      elif delta < 0:
-        ret.buttonEvents = [structs.CarState.ButtonEvent(pressed=False, type=ButtonType.decelCruise)] * min(-delta, 10)
+      self._pending_delta += cruise_kph_now - self._cruise_speed_prev_kph
     self._cruise_speed_prev_kph = cruise_kph_now
+
+    if self._pending_delta > 0:
+      ret.buttonEvents = [structs.CarState.ButtonEvent(pressed=False, type=ButtonType.accelCruise)]
+      self._pending_delta -= 1
+    elif self._pending_delta < 0:
+      ret.buttonEvents = [structs.CarState.ButtonEvent(pressed=False, type=ButtonType.decelCruise)]
+      self._pending_delta += 1
 
     # lock info
     ret.doorOpen = not all([pt_cp.vl["Doors"]["DriverDoorClosed"], pt_cp.vl["Doors"]["PassengerDoorClosed"]])
