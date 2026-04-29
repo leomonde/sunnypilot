@@ -112,11 +112,6 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       if at_standstill and self.waiting and (lead_moved or e2e_resume):
         # send 25 messages at a time to increases the likelihood of resume being accepted
         can_sends.extend([volvocan.create_button_msg(self.packer_pt, resume=True)] * 25)
-        if self.CP.openpilotLongitudinalControl:
-          # Already sending FSM3 every frame above; SNG just needs the resume button blast.
-          pass
-        else:
-          can_sends.extend([volvocan.create_acc_state_msg(self.packer_pt)] * 25)
         if self.sng_count == 0:
           self.takeoff_start_frame = self.frame
           self.sng_ack_frames = 25
@@ -151,7 +146,11 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           self.sng_ack_frames -= 1
       else:
         accel = float(CS.stock_FSM3["ACC_AccelerationRequest"])
-        acc_check = int(CS.stock_FSM3["ACC_Check"])
+        if self.sng_ack_frames > 0:
+          acc_check = 1
+          self.sng_ack_frames -= 1
+        else:
+          acc_check = int(CS.stock_FSM3["ACC_Check"])
 
       can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, accel, acc_check))
       can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, CC.longActive))
