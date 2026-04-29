@@ -31,27 +31,14 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.distance = 0
     self.waiting = False
     self.sng_count = 0
-    # Frame when the most recent resume-blast cycle started. Used to pass
-    # through stock's FSM3 accel during the take-off window so the ECM's
-    # actual response matches stock ACC's internal expectation — OP's
-    # planner under-commands and stock cancels (drives 3e seg 7, 3f seg 11).
+    # frame when last SNG resume blast started; used for take-off passthrough window
     self.takeoff_start_frame = -1_000_000
 
-    # Next wall-clock nanosecond at which FSM3 / FSM1 TX is allowed.
-    # controlsd scheduling jitter means self.frame % 2 == 0 gives us 10–30ms
-    # intervals instead of a clean 20ms (drive 41 seg 4: OP TX stdev 2.6ms
-    # vs stock 0.5ms, with 9.8ms bursts and 30ms gaps). The ECM validates
-    # cadence of stock ACC messages — our bursty pattern looks like a fault
-    # and likely contributes to the self-cancels. Gate TX on wall-clock.
+    # wall-clock gate for FSM3/FSM1 TX — controlsd jitter makes frame%2 unreliable (drive 41)
     self.next_long_tx_nanos = 0
-    # Period between FSM3 TXs (20ms = 50Hz, matching stock).
-    self.LONG_TX_PERIOD_NANOS = 20_000_000
+    self.LONG_TX_PERIOD_NANOS = 20_000_000  # 50Hz, matching stock
 
-    # ACC_Check is the resume-button acknowledgement bit in FSM3. Per
-    # leomonde, it must be forced to 1 specifically during the resume
-    # blast (not copied from stock's FSM3, which sits at 0 almost always).
-    # Count of remaining FSM3 TXs that should carry ACC_Check=1. Set to 25
-    # (~0.5s of 50Hz TX) when SNG fires a resume blast; decrements to 0.
+    # remaining FSM3 TXs with ACC_Check=1; must be forced during resume blast (not copied from stock)
     self.sng_ack_frames = 0
 
   def update(self, CC, CC_SP, CS, now_nanos):
@@ -61,8 +48,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     actuators = CC.actuators
     pcm_cancel_cmd = CC.cruiseControl.cancel
 
-    # Cancel ACC if engaged when OP is not, but only above minimum steering speed.
-    # TODO: is this check needed? it might trying to fix broken standstill behavior
+    # TODO: verify if this minSteerSpeed guard is still needed
     if pcm_cancel_cmd and CS.out.vEgo > self.CP.minSteerSpeed:
       can_sends.append(volvocan.create_button_msg(self.packer_pt, cancel=True))
 
@@ -113,18 +99,13 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     at_standstill = (CS.out.cruiseState.enabled and CS.out.cruiseState.standstill
                      and CS.out.vEgo < 0.01)
 
-    # SNG — evaluated BEFORE the long-control TX block so the take-off window
-    # flag set here is visible when we pick OP-vs-stock accel below.
-    # wait 100 cycles since last resume sent
+    # SNG — evaluated before long-control TX so takeoff flag is visible below
     if (self.frame - self.last_resume_frame) * DT_CTRL > 1.00:
       if at_standstill and not self.waiting:
         self.distance = CS.acc_distance
         self.waiting = True
         self.sng_count = 0
 
-      # Trigger resume on lead moving OR on planner clearing shouldStop (green
-      # light / stop sign cleared in experimental mode). CC.cruiseControl.resume
-      # is True when OP is engaged, car is at standstill, and shouldStop → False.
       lead_moved = CS.acc_distance > self.distance
       e2e_resume = CC.cruiseControl.resume
 
@@ -136,11 +117,6 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           pass
         else:
           can_sends.extend([volvocan.create_acc_state_msg(self.packer_pt)] * 25)
-        # Mark the start of the take-off window on the first blast of this
-        # resume cycle so the long block below can defer to stock's accel.
-        # Also arm the ACC_Check=1 acknowledgement window for the next
-        # ~0.5s of FSM3 TXs — the car needs that ack to actually honor the
-        # resume button (per leomonde: "force 1, not copy from FSM").
         if self.sng_count == 0:
           self.takeoff_start_frame = self.frame
           self.sng_ack_frames = 25
@@ -150,16 +126,9 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         self.waiting = False
         self.last_resume_frame = self.frame
 
-    # FSM3/FSM1 TX: always at 50Hz wall-clock, regardless of whether OP long
-    # is enabled. When OP long is active, send OP's accel values. Otherwise,
-    # pass through stock cam-bus values verbatim so the car's ECU never sees
-    # silence on these IDs — which causes faults when panda's fwd hook does
-    # not forward them (observed with alpha long disabled).
+    # FSM3/FSM1 at 50Hz wall-clock: OP accel when long active, stock passthrough otherwise (silence faults ECU)
     long_tx_due = now_nanos >= self.next_long_tx_nanos
     if long_tx_due:
-      # Advance target by exactly one period. If we'd already be past the
-      # advanced time (first TX after a long gap or controlsd stall),
-      # resync to avoid a burst of catch-up TXs.
       next_tx = self.next_long_tx_nanos + self.LONG_TX_PERIOD_NANOS
       if self.next_long_tx_nanos == 0 or next_tx <= now_nanos:
         next_tx = now_nanos + self.LONG_TX_PERIOD_NANOS
@@ -168,46 +137,24 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       if self.CP.openpilotLongitudinalControl and CC.longActive:
         op_accel = float(np.clip(actuators.accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
 
-        # Take-off passthrough: after a SNG resume blast, while still rolling
-        # below 5 m/s, defer to stock's ACC_AccelerationRequest when stock
-        # wants MORE positive accel than OP. Stock's take-off ramp was
-        # commanding +0.88 m/s² in drive 0000042 seg 3 while OP only wanted
-        # +0.62; the car lagged stock's expected response profile and stock
-        # cancelled 0.3s into the takeoff. Mirroring stock's value (when
-        # higher) keeps stock's state machine satisfied. OP takes back over
-        # once cruising above 5 m/s.
-        #
-        # Direction guard: only passes stock's POSITIVE accel. If OP wants to
-        # brake during the takeoff (e.g. lead suddenly stopped), OP's value
-        # drives — OP sees the lead via radar, stock's brake authority via
-        # FSM3 is weak on this car anyway.
+        # take-off passthrough: use stock's accel when it's higher than OP's to match ECM expectations (drive 42)
         takeoff_elapsed = (self.frame - self.takeoff_start_frame) * DT_CTRL
         stock_accel = float(CS.stock_FSM3["ACC_AccelerationRequest"])
-        # 15s ceiling: snap back to OP in crawl traffic so runaway stock
-        # commands can't persist indefinitely.
-        in_takeoff_window = takeoff_elapsed < 15.0 and CS.out.vEgo < 5.0
+        in_takeoff_window = takeoff_elapsed < 15.0 and CS.out.vEgo < 5.0  # 15s ceiling prevents runaway stock accel
         if in_takeoff_window and stock_accel > op_accel and stock_accel > 0:
           accel = stock_accel
         else:
           accel = op_accel
 
-        # ACC_Check: 1 only during the post-resume acknowledgement window
-        # (set by the SNG block above), else 0.
         acc_check = 1 if self.sng_ack_frames > 0 else 0
         if self.sng_ack_frames > 0:
           self.sng_ack_frames -= 1
       else:
-        # OP long disabled or inactive: relay stock FSM3 values verbatim so
-        # the ECU receives a continuous stream and does not fault.
         accel = float(CS.stock_FSM3["ACC_AccelerationRequest"])
         acc_check = int(CS.stock_FSM3["ACC_Check"])
 
       can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, accel, acc_check))
       can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, CC.longActive))
-
-    # FSM3/FSM1 are TX'd together inside long_tx_due so they stay in the
-    # same bus frame and share the 50Hz cadence.
-
 
     # Intelligent Cruise Button Management
     can_sends.extend(IntelligentCruiseButtonManagementInterface.update(self, CC_SP, CS, self.packer_pt, self.frame, self.last_button_frame))

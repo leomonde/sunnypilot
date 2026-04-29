@@ -52,12 +52,7 @@ class CarState(CarStateBase):
     ret.cruiseState.speedCluster = ret.cruiseState.speed
     ret.cruiseState.available = bool(cam_cp.vl["FSM0"]["ACC_Available"])
     ret.cruiseState.enabled = bool(cam_cp.vl["FSM0"]["ACC_Enabled"])
-    # ACC_Standstill bit = 1 when Volvo's ACC is holding the car at 0 km/h
-    # with brake applied (standstill hold). OP's SNG block reads this to know
-    # when to blast Resume button so stock ACC properly releases and follows
-    # the lead resuming. Without this, stock ACC sees OP commanding accel
-    # from standstill without a Resume press and hard-cancels (observed in
-    # drive 38).
+    # standstill hold; SNG uses this to time the resume blast (hard-cancel without it, drive 38)
     ret.cruiseState.standstill = bool(cam_cp.vl["FSM3"]["ACC_Standstill"])
     ret.cruiseState.nonAdaptive = False
     ret.accFaulted = False
@@ -90,13 +85,8 @@ class CarState(CarStateBase):
     ret.leftBlinker = pt_cp.vl["MiscCarInfo"]["TurnSignal"] == 1
     ret.rightBlinker = pt_cp.vl["MiscCarInfo"]["TurnSignal"] == 3
 
-    # Synthesize cruise buttonEvents from ACC_Speed changes so OP's v_cruise
-    # tracks the car's setpoint. Volvo steps 5 km/h per press; emit one event
-    # per frame from a pending delta so each frame's non-pcm cruise loop
-    # processes one increment — all 5 events consumed across 5 frames instead
-    # of 5 arriving at once with only 1 processed (the loop breaks after first).
-    # The ICBM preActive timer (0.4 s) ensures ICBM doesn't act before v_cruise
-    # converges.
+    # synthesize one accelCruise/decelCruise per frame from pending delta so the
+    # non-pcm cruise loop processes each km/h increment individually (breaks after first)
     cruise_kph_now = round(ret.cruiseState.speed * CV.MS_TO_KPH)
     if ret.cruiseState.enabled and self.cruiseState_enabled_prev:
       self._pending_delta += cruise_kph_now - self._cruise_speed_prev_kph
@@ -113,15 +103,12 @@ class CarState(CarStateBase):
     ret.doorOpen = not all([pt_cp.vl["Doors"]["DriverDoorClosed"], pt_cp.vl["Doors"]["PassengerDoorClosed"]])
     ret.seatbeltUnlatched = False
 
-    # Store info from servo message PSCM1
     self.pscm_stock_values = pt_cp.vl["PSCM1"]
-
-    # Messages forwarded for oplong and radar spoofing
     self.stock_FSM1 = copy.copy(cam_cp.vl["FSM1"])
     self.stock_FSM3 = copy.copy(cam_cp.vl["FSM3"])
     self.ACC_Check = cam_cp.vl["FSM3"]["ACC_Check"]
 
-    # Traffic Sign Recognition speed limit (FSM5, 0 = no sign detected)
+    # TSR speed limit from camera (0 = no sign)
     tsr_raw = cam_cp.vl["FSM5"]["TSR_Speed"]
     ret_sp.speedLimit = tsr_raw * CV.KPH_TO_MS if tsr_raw > 0 else 0.0
 

@@ -10,44 +10,11 @@ from opendbc.can import CANDefine
 
 Ecu = CarParams.Ecu
 
-"""
-Volvo Electronic Control Units abbreviations and network topology
-Platforms C1MCA/EUCD
-
-Three main CAN network buses
-  1. Powertrain
-  2. Chassis (also called MS* CAN) *MS=Medium Speed
-  3. Extended
-Only mentioning control units of interest on the network buses.
-
-Powertrain CAN
-  BCM - Brake Control Module
-  CEM - Central Electronic Module
-  CVM - Closing Velocity Module (low speed auto emergency braking <30kph)
-  FSM - Forward Sensing Module (camera mounted in windscreen)
-  PPM - Pedestrian Protection Module (controls pedestrian airbag under the engine hood)
-  PSCM - Power Steering Control Module (EPS - Electronic Power Steering)
-  SAS - Steering Angle Sensor Module
-  SRS - Supplemental Restraint System Module (seatbelts, airbags...)
-  TCM - Transmission Control Module
-
-Chassis CAN
-  CEM - Central Electronic Module
-  DIM - Driver Information Module (the instrument cluster with odo and speedometer, relayed thru CEM)
-  PAM - Parking Assistance Module (automatic parking, relayed thru CEM)
-
-Extended CAN
-  CEM - Central Electronic Module
-  SODL - Side Object Detection Left (relayed thru CEM)
-  SODR - Side Object Detection Right (relayed thru CEM)
-"""
+# Volvo EUCD/C1MCA CAN buses: pt (BCM/FSM/PSCM/SAS), chassis (DIM/PAM via CEM), ext (SODL/SODR via CEM)
 
 
 class SteerDirection(IntEnum):
-  """Constants for LKASteerDirection.
-
-  On the EUCD platform, we need to wait 8 frames when switching from LEFT to RIGHT
-  and vice versa. On the C1MCA platform, we can instead use BOTH."""
+  """LKASteerDirection: EUCD needs 8-frame wait on direction change; C1MCA can use BOTH."""
   NONE = 0
   RIGHT = 1
   LEFT = 2
@@ -55,32 +22,20 @@ class SteerDirection(IntEnum):
 
 
 class CarControllerParams:
-  # EUCD: Torque limit for steering is 50 CAN units
-  ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(90,  # deg, reasonable limit
+  ANGLE_LIMITS: AngleSteeringLimits = AngleSteeringLimits(90,
     ([0., 5., 15.], [5., .8, .15]),
     ([0., 5., 15.], [5., 3.5, 0.4]),
   )
 
-  # Temporary steer fault timeout
-  # Maximum time to continuously read 0 torque from EPS
-  STEER_TIMEOUT = 30 / DT_CTRL
-
-  # EUCD
-  # When changing steer direction steering request need to be blocked.
-  # Otherwise servo won't "listen" to the request.
-  # This calibration sets the number of samples to block steering request.
-  BLOCK_LEN = 8
-  # When close to desired steering angle, don't change steer direction inside deadzone.
-  # Since we need to release control of the steering wheel for a brief moment, steering wheel will
-  # unwind by itself.
-  DEADZONE = 0.2
+  STEER_TIMEOUT = 30 / DT_CTRL  # frames before steer fault on sustained 0-torque from EPS
+  BLOCK_LEN = 8   # EUCD: frames to block steering on direction change (servo ignores otherwise)
+  DEADZONE = 0.2  # deg: hold previous direction inside deadzone to avoid unwind
 
   ACCEL_MIN = -4.0  # m/s^2
   ACCEL_MAX = 2.0   # m/s^2
 
   def __init__(self, CP):
     can_define = CANDefine(DBC[CP.carFingerprint][Bus.pt])
-    #pass
 
 class CANBUS:
   pt = 0
@@ -88,11 +43,7 @@ class CANBUS:
   cam = 2
 
 
-# The Delphi ESR 2.5 "forward-looking radar" sits on the aux bus and streams
-# 64 tracks at 20Hz at 0x500..0x53F. Openpilot reads it directly so the planner
-# sees lead info independently of stock FSM fusion (which only reports a single
-# 1m-resolution ACC_Distance). Prior to this the planner had radarUnavailable=True
-# and lost leads in curves / under-commanded accel at take-off (drive 0000003e).
+# Delphi ESR 2.5 on aux bus (0x500–0x53F, 20Hz, 64 tracks); read directly so planner sees leads independently of stock FSM
 RADAR_ESR = "ESR"
 
 @dataclass
@@ -117,8 +68,6 @@ class VolvoCarSpecs(CarSpecs):
 
 
 class CAR(Platforms):
-  #config: VolvoEUCDPlatformConfig
-
   VOLVO_V60 = VolvoEUCDPlatformConfig(
     [VolvoCarDocs("Volvo V60")],
     VolvoCarSpecs(mass=1750, wheelbase=2.776),
