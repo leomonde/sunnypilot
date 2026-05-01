@@ -56,10 +56,10 @@ def create_lka_msg(packer, apply_steer: float, steer_direction: int):
   return packer.make_can_msg("FSM2", 0, values)
 
 
-def create_longitudinal(packer, stock_fsm3, accel, acc_check):
-  # pass stock FSM3 verbatim except ACC_AccelerationRequest and ACC_Check; bit flip faults ECU (drive 27)
+def create_longitudinal(packer, stock_fsm3, accel, acc_check, acc_standstill=None):
+  # pass stock FSM3 verbatim except ACC_AccelerationRequest, ACC_Check and (optionally) ACC_Standstill
+  # bit flip faults ECU (drive 27); acc_standstill=None means pass stock through
   values = {s: stock_fsm3[s] for s in (
-    "ACC_Standstill",
     "Byte_01",
     "Byte_02",
     "Byte_2",
@@ -69,6 +69,7 @@ def create_longitudinal(packer, stock_fsm3, accel, acc_check):
     "Byte_6",
     "Byte_7",
   )}
+  values["ACC_Standstill"] = int(acc_standstill) if acc_standstill is not None else int(stock_fsm3["ACC_Standstill"])
   values |= {
     "ACC_AccelerationRequest": accel,
     "ACC_Check": acc_check,
@@ -76,8 +77,14 @@ def create_longitudinal(packer, stock_fsm3, accel, acc_check):
   return packer.make_can_msg("FSM3", 0, values)
 
 
-def create_radar(packer, stock_fsm1, long_active):
-  # pass stock FSM1 verbatim; spoofing ACC_Distance=255 caused stock ACC to disengage below 30 km/h
+def create_radar(packer, stock_fsm1, long_active, virt_dist=None, virt_b1=None):
+  # Pass through stock FSM1 with optional virtual-lead override for brake authority.
+  # When virt_dist is provided, ACC_Distance and Byte_1 are replaced with synthetic
+  # values that signal a nearby lead so the ECU grants hydraulic-brake authority it
+  # withholds when dist > ~80.  Byte_2 is set to 0xb8 ("tracked target") when the
+  # stock value is 0x00 so the FSM1 payload stays internally consistent.
+  # When virt_dist is None the function is a pure passthrough — identical to the
+  # original behaviour.
   _ = long_active  # kept for signature stability
   values = {s: stock_fsm1[s] for s in (
     "ACC_Distance",
@@ -89,4 +96,9 @@ def create_radar(packer, stock_fsm1, long_active):
     "Byte_6",
     "Byte_7",
   )}
+  if virt_dist is not None:
+    values["ACC_Distance"] = virt_dist
+    values["Byte_1"] = virt_b1 if virt_b1 is not None else 0xeb
+    if values["Byte_2"] == 0:
+      values["Byte_2"] = 0xb8  # "tracked target" state; avoids inconsistent FSM1 payload
   return packer.make_can_msg("FSM1", 0, values)

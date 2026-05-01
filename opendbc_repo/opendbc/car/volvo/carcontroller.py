@@ -33,6 +33,14 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.sng_count = 0
     # frame when last SNG resume blast started; used for take-off passthrough window
     self.takeoff_start_frame = -1_000_000
+    # consecutive long_tx ticks we have been stopped with longActive (drives ACC_Standstill)
+    self.op_standstill_frames = 0
+
+    # Virtual lead distance injected into FSM1 to grant the ECU hydraulic-brake authority
+    # proportional to OP's deceleration request. Drive 4d4: ECU caps braking at ~0.08 m/s²
+    # when ACC_Distance > 80 (engine-braking zone), grants up to ~0.88 m/s² below dist ≈ 45.
+    # Starts at 255 ("no lead"); drifts toward target at ≤10 units/frame to avoid step changes.
+    self.virt_dist = 255.0
 
     # wall-clock gate for FSM3/FSM1 TX — controlsd jitter makes frame%2 unreliable (drive 41)
     self.next_long_tx_nanos = 0
@@ -96,8 +104,16 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       # Avoids faults that will stop servo from accepting steering commands.
       can_sends.append(volvocan.create_lkas_state_msg(self.packer_pt, CS.out.steeringAngleDeg, CS.pscm_stock_values))
 
-    at_standstill = (CS.out.cruiseState.enabled and CS.out.cruiseState.standstill
-                     and CS.out.vEgo < 0.01)
+    # When OP long-controls, stock ACC never asserts ACC_Standstill=1 (it sees
+    # OP's accel, not zero). Use vehicle standstill + a 3-tick delay so the ECU
+    # has already received ACC_Standstill=1 in FSM3 before the resume blast fires
+    # (without the delay the ECU hard-cancels ACC — drive 38).
+    if self.CP.openpilotLongitudinalControl and CC.longActive:
+      at_standstill = (CS.out.cruiseState.enabled and CS.out.standstill
+                       and self.op_standstill_frames >= 3)
+    else:
+      at_standstill = (CS.out.cruiseState.enabled and CS.out.cruiseState.standstill
+                       and CS.out.vEgo < 0.01)
 
     # SNG — evaluated before long-control TX so takeoff flag is visible below
     if (self.frame - self.last_resume_frame) * DT_CTRL > 1.00:
@@ -116,8 +132,13 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           self.takeoff_start_frame = self.frame
           self.sng_ack_frames = 25
         self.sng_count += 1
-      # disable sending resume after 5 cycles sent or if no more in standstill
-      if self.waiting and (self.sng_count >= 5 or not CS.out.cruiseState.standstill):
+      # disable sending resume after 5 cycles sent or once the car is no longer in standstill;
+      # when OP long is active, use vehicle motion (standstill=False) instead of stock ACC_Standstill
+      if self.CP.openpilotLongitudinalControl and CC.longActive:
+        sng_exit = self.sng_count >= 5 or not CS.out.standstill
+      else:
+        sng_exit = self.sng_count >= 5 or not CS.out.cruiseState.standstill
+      if self.waiting and sng_exit:
         self.waiting = False
         self.last_resume_frame = self.frame
 
@@ -141,19 +162,53 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         else:
           accel = op_accel
 
+        # Standstill hold: track consecutive ticks the vehicle has been stopped;
+        # reset only when the car actually moves (not when the take-off window opens).
+        # This lets ACC_Standstill stay asserted throughout the take-off window while
+        # the accel command switches from 0.0 to OP/stock take-off accel.
+        if CS.out.standstill:
+          self.op_standstill_frames += 1
+          if not in_takeoff_window:
+            accel = 0.0  # hold at exact-zero until the ECU gets the resume button
+        else:
+          self.op_standstill_frames = 0
+
+        # Assert ACC_Standstill=1 once 3 ticks of stopped+longActive have elapsed so
+        # the ECU is already in standstill hold before the SNG resume blast fires.
+        acc_standstill = 1 if (CS.out.standstill and self.op_standstill_frames >= 3) else 0
+
         acc_check = 1 if self.sng_ack_frames > 0 else 0
         if self.sng_ack_frames > 0:
           self.sng_ack_frames -= 1
+
+        # Virtual lead: map OP's brake demand to a synthetic ACC_Distance so the ECU
+        # grants hydraulic-brake authority it withholds when dist > ~80.
+        #   knee at -0.15 m/s² → dist 80 (ECU starts allowing more braking)
+        #   saturates at -0.80 m/s² → dist 35 (ECU grants full authority ~0.88 m/s²)
+        if accel < -0.15:
+          frac = min(1.0, (abs(accel) - 0.15) / 0.65)
+          target_dist = 80.0 - frac * 45.0
+        else:
+          target_dist = 255.0
+        self.virt_dist += max(-10.0, min(10.0, target_dist - self.virt_dist))
+        virt_dist_int = int(round(self.virt_dist))
+        virt_b1 = max(235, min(250, int(235 + (80 - virt_dist_int) * 0.333)))
+        can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, True,
+                                               virt_dist=virt_dist_int, virt_b1=virt_b1))
       else:
+        self.op_standstill_frames = 0
+        acc_standstill = None  # pass stock ACC_Standstill through
         accel = float(CS.stock_FSM3["ACC_AccelerationRequest"])
         if self.sng_ack_frames > 0:
           acc_check = 1
           self.sng_ack_frames -= 1
         else:
           acc_check = int(CS.stock_FSM3["ACC_Check"])
+        # Drift virt_dist back to 255 so the next longActive period starts neutral (no phantom lead).
+        self.virt_dist = min(255.0, self.virt_dist + 10.0)
+        can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, CC.longActive))
 
-      can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, accel, acc_check))
-      can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, CC.longActive))
+      can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, accel, acc_check, acc_standstill))
 
     # Intelligent Cruise Button Management
     can_sends.extend(IntelligentCruiseButtonManagementInterface.update(self, CC_SP, CS, self.packer_pt, self.frame, self.last_button_frame))
