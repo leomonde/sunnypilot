@@ -78,27 +78,24 @@ def create_longitudinal(packer, stock_fsm3, accel, acc_check, acc_standstill=Non
 
 
 def create_radar(packer, stock_fsm1, long_active, virt_dist=None, virt_b1=None):
-  # Pass through stock FSM1 with optional virtual-lead override for brake authority.
-  # When virt_dist is provided, ACC_Distance and Byte_1 are replaced with synthetic
-  # values that signal a nearby lead so the ECU grants hydraulic-brake authority it
-  # withholds when dist > ~80.  Byte_2 is set to 0xb8 ("tracked target") when the
-  # stock value is 0x00 so the FSM1 payload stays internally consistent.
-  # When virt_dist is None the function is a pure passthrough — identical to the
-  # original behaviour.
+  # Pass stock FSM1 through, optionally overriding ACC_Distance/ACC_LeadConf/ACC_TargetState
+  # with a virtual lead to grant the ECU hydraulic-brake authority (drive 4d4).
+  # Virtual values are only applied when they are closer than the stock distance,
+  # so a real lead is never hidden from the ECU.
   _ = long_active  # kept for signature stability
   values = {s: stock_fsm1[s] for s in (
     "ACC_Distance",
-    "Byte_1",
-    "Byte_2",
+    "ACC_LeadConf",
+    "ACC_TargetState",
     "Byte_3",
     "Byte_4",
     "Byte_5",
     "Byte_6",
     "Byte_7",
   )}
-  if virt_dist is not None:
+  if virt_dist is not None and virt_dist < int(stock_fsm1["ACC_Distance"]):
     values["ACC_Distance"] = virt_dist
-    values["Byte_1"] = virt_b1 if virt_b1 is not None else 0xeb
-    if values["Byte_2"] == 0:
-      values["Byte_2"] = 0xb8  # "tracked target" state; avoids inconsistent FSM1 payload
+    values["ACC_LeadConf"] = virt_b1 if virt_b1 is not None else 0xeb
+    if values["ACC_TargetState"] == 0:
+      values["ACC_TargetState"] = 0xb8  # "tracked target"; avoids inconsistent FSM1 payload
   return packer.make_can_msg("FSM1", 0, values)

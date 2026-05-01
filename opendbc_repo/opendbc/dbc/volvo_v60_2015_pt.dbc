@@ -137,8 +137,8 @@ BO_ 582 PSCM1: 8 PSCM
 
 BO_ 608 FSM1: 8 FSM
  SG_ ACC_Distance : 7|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ ACC_LeadConf : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ ACC_TargetState : 23|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
@@ -307,6 +307,9 @@ CM_ SG_ 582 LKAActive "Bit 1, 1 When LKA Active, Bit 3, 1 When denying?";
 CM_ SG_ 608 ACC_Distance "Seems to track distance, or speed of vehicle in front.";
 CM_ SG_ 610 SET_X_22 "0x20 Heartbeat, VEgo <58kph = 0x03, VEgo >65kph = 0x04, 0x05";
 CM_ SG_ 648 Counter "counts 0 to 6";
+CM_ SG_ 608 ACC_Distance "Distance to detected lead; 255 = no lead in range.";
+CM_ SG_ 608 ACC_LeadConf "Radar target signal strength, inversely proportional to lead distance. 0xEB when no lead or lead > 100; rises to 0xFF as lead approaches below 30. Used as ACC_LeadConf override in FSM1 to signal a virtual lead for hydraulic-brake authority.";
+CM_ SG_ 608 ACC_TargetState "Radar target tracking state. 0x00 = no target or momentary dropout; 0xB8 = actively tracking a target.";
 CM_ SG_ 1021 TSR_Speed "Traffic Sign Recognition speed";
 CM_ SG_ 1039 TurnSignal "0 = Nothing, 1= Left, 3=Right";
 VAL_ 522 BrakePedal 1 "Not Pressed" 2 "Pressed";

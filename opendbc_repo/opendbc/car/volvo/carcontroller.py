@@ -31,23 +31,18 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.distance = 0
     self.waiting = False
     self.sng_count = 0
-    # frame when last SNG resume blast started; used for take-off passthrough window
-    self.takeoff_start_frame = -1_000_000
-    # consecutive long_tx ticks we have been stopped with longActive (drives ACC_Standstill)
-    self.op_standstill_frames = 0
+    self.takeoff_start_frame = -1_000_000  # frame when last SNG resume blast started
+    self.op_standstill_frames = 0  # consecutive long_tx ticks stopped with longActive
 
-    # Virtual lead distance injected into FSM1 to grant the ECU hydraulic-brake authority
-    # proportional to OP's deceleration request. Drive 4d4: ECU caps braking at ~0.08 m/s²
-    # when ACC_Distance > 80 (engine-braking zone), grants up to ~0.88 m/s² below dist ≈ 45.
-    # Starts at 255 ("no lead"); drifts toward target at ≤10 units/frame to avoid step changes.
+    # virtual lead distance in FSM1; proportional to OP decel to grant ECU hydraulic-brake authority (drive 4d4)
+    # starts at 255 ("no lead"), drifts ≤10 units/frame toward target to avoid step changes
     self.virt_dist = 255.0
 
-    # wall-clock gate for FSM3/FSM1 TX — controlsd jitter makes frame%2 unreliable (drive 41)
+    # wall-clock gate for FSM3/FSM1 TX — frame%2 unreliable due to controlsd jitter (drive 41)
     self.next_long_tx_nanos = 0
     self.LONG_TX_PERIOD_NANOS = 20_000_000  # 50Hz, matching stock
 
-    # remaining FSM3 TXs with ACC_Check=1; must be forced during resume blast (not copied from stock)
-    self.sng_ack_frames = 0
+    self.sng_ack_frames = 0  # remaining FSM3 TXs with ACC_Check=1 during resume blast
 
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
@@ -104,10 +99,8 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       # Avoids faults that will stop servo from accepting steering commands.
       can_sends.append(volvocan.create_lkas_state_msg(self.packer_pt, CS.out.steeringAngleDeg, CS.pscm_stock_values))
 
-    # When OP long-controls, stock ACC never asserts ACC_Standstill=1 (it sees
-    # OP's accel, not zero). Use vehicle standstill + a 3-tick delay so the ECU
-    # has already received ACC_Standstill=1 in FSM3 before the resume blast fires
-    # (without the delay the ECU hard-cancels ACC — drive 38).
+    # With OP long-control, stock ACC never sets ACC_Standstill; use vehicle motion + 3-tick delay
+    # so the ECU sees ACC_Standstill=1 in FSM3 before the resume blast fires (drive 38).
     if self.CP.openpilotLongitudinalControl and CC.longActive:
       at_standstill = (CS.out.cruiseState.enabled and CS.out.standstill
                        and self.op_standstill_frames >= 3)
@@ -132,8 +125,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           self.takeoff_start_frame = self.frame
           self.sng_ack_frames = 25
         self.sng_count += 1
-      # disable sending resume after 5 cycles sent or once the car is no longer in standstill;
-      # when OP long is active, use vehicle motion (standstill=False) instead of stock ACC_Standstill
+      # exit waiting after 5 blasts or when car moves; OP long uses vehicle motion, not stock ACC_Standstill
       if self.CP.openpilotLongitudinalControl and CC.longActive:
         sng_exit = self.sng_count >= 5 or not CS.out.standstill
       else:
@@ -162,10 +154,8 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         else:
           accel = op_accel
 
-        # Standstill hold: track consecutive ticks the vehicle has been stopped;
-        # reset only when the car actually moves (not when the take-off window opens).
-        # This lets ACC_Standstill stay asserted throughout the take-off window while
-        # the accel command switches from 0.0 to OP/stock take-off accel.
+        # hold accel=0 at standstill until the resume blast; counter resets only on motion,
+        # so ACC_Standstill stays asserted through the take-off window.
         if CS.out.standstill:
           self.op_standstill_frames += 1
           if not in_takeoff_window:
@@ -173,18 +163,14 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         else:
           self.op_standstill_frames = 0
 
-        # Assert ACC_Standstill=1 once 3 ticks of stopped+longActive have elapsed so
-        # the ECU is already in standstill hold before the SNG resume blast fires.
+        # delay 3 ticks so ECU is already in standstill hold before the resume blast fires
         acc_standstill = 1 if (CS.out.standstill and self.op_standstill_frames >= 3) else 0
 
         acc_check = 1 if self.sng_ack_frames > 0 else 0
         if self.sng_ack_frames > 0:
           self.sng_ack_frames -= 1
 
-        # Virtual lead: map OP's brake demand to a synthetic ACC_Distance so the ECU
-        # grants hydraulic-brake authority it withholds when dist > ~80.
-        #   knee at -0.15 m/s² → dist 80 (ECU starts allowing more braking)
-        #   saturates at -0.80 m/s² → dist 35 (ECU grants full authority ~0.88 m/s²)
+        # virtual lead: knee at -0.15 m/s² → dist 80, saturates at -0.80 m/s² → dist 35
         if accel < -0.15:
           frac = min(1.0, (abs(accel) - 0.15) / 0.65)
           target_dist = 80.0 - frac * 45.0
@@ -204,7 +190,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           self.sng_ack_frames -= 1
         else:
           acc_check = int(CS.stock_FSM3["ACC_Check"])
-        # Drift virt_dist back to 255 so the next longActive period starts neutral (no phantom lead).
+        # drift virt_dist back to 255 so the next longActive period starts neutral
         self.virt_dist = min(255.0, self.virt_dist + 10.0)
         can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, CC.longActive))
 
