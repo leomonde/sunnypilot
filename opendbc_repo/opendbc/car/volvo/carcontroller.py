@@ -163,8 +163,8 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         else:
           self.op_standstill_frames = 0
 
-        # delay 3 ticks so ECU is already in standstill hold before the resume blast fires
-        acc_standstill = 1 if (CS.out.standstill and self.op_standstill_frames >= 3) else 0
+        # assert only when truly stopped and not in takeoff window — vEgo gate prevents jerk; takeoff gate releases brake hold
+        acc_standstill = 1 if (CS.out.standstill and self.op_standstill_frames >= 3 and abs(CS.out.vEgo) < 0.01 and not in_takeoff_window) else 0
 
         acc_check = 1 if self.sng_ack_frames > 0 else 0
         if self.sng_ack_frames > 0:
