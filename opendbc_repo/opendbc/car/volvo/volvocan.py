@@ -77,6 +77,19 @@ def create_longitudinal(packer, stock_fsm3, accel, acc_check, acc_standstill=Non
   return packer.make_can_msg("FSM3", 0, values)
 
 
+def create_fsm4(packer, stock_fsm4, lead_speed_kmh=None):
+  # Pass stock FSM4 through, optionally overriding ACC_LeadSpeed with a virtual
+  # lead speed (km/h, integer) to create a closing rate that grants ECM braking
+  # authority when OP requests deceleration (drive 4e1).
+  values = {s: stock_fsm4[s] for s in (
+    "Byte_0", "Byte_1", "Byte_2", "ACC_LeadSpeed",
+    "Byte_4", "Byte_5", "Byte_6", "Byte_7",
+  )}
+  if lead_speed_kmh is not None:
+    values["ACC_LeadSpeed"] = max(0, int(round(lead_speed_kmh)))
+  return packer.make_can_msg("FSM4", 0, values)
+
+
 def create_radar(packer, stock_fsm1, long_active, virt_dist=None, virt_b1=None):
   # Pass stock FSM1 through, optionally overriding ACC_Distance/ACC_LeadConf/ACC_TargetState
   # with a virtual lead to grant the ECU hydraulic-brake authority (drive 4d4).

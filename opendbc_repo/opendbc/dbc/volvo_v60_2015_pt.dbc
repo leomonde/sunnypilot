@@ -185,9 +185,14 @@ BO_ 750 HandBrake: 8 XXX
  SG_ Hand_Brake_State : 44|4@0+ (1,0) [0|15] "" XXX
 
 BO_ 794 FSM4: 8 FSM
+ SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
  SG_ ACC_LeadSpeed : 31|8@0+ (1,0) [0|255] "" XXX
- SG_ NEW_SIGNAL_2 : 32|4@1+ (1,0) [0|15] "" XXX
- SG_ NEW_SIGNAL_1 : 47|16@0+ (1,-46090) [0|16383] "" XXX
+ SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_7 : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 802 StartStop: 8 XXX
  SG_ StartStop : 8|1@0+ (1,0) [0|1] "" XXX

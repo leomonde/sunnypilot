@@ -106,6 +106,7 @@ class CarState(CarStateBase):
     self.pscm_stock_values = pt_cp.vl["PSCM1"]
     self.stock_FSM1 = copy.copy(cam_cp.vl["FSM1"])
     self.stock_FSM3 = copy.copy(cam_cp.vl["FSM3"])
+    self.stock_FSM4 = copy.copy(cam_cp.vl["FSM4"])
     self.ACC_Check = cam_cp.vl["FSM3"]["ACC_Check"]
 
     # TSR speed limit from camera (0 = no sign)
@@ -133,6 +134,7 @@ class CarState(CarStateBase):
       ("FSM0", 100),
       ("FSM1", 50),
       ("FSM3", 50),
+      ("FSM4", 33),
       ("FSM5", 10),
     ]
 

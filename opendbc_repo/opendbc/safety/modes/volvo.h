@@ -12,6 +12,7 @@
 #define VOLVO_EUCD_FSM1          0x260  // TX by OP, ACC radar/distance message (oplong)
 #define VOLVO_EUCD_FSM2          0x262  // TX by OP, LKA command
 #define VOLVO_EUCD_FSM3          0x270  // TX by OP, ACC accel request + status
+#define VOLVO_EUCD_FSM4          0x31A  // TX by OP, virtual lead speed for braking authority
 
 // CAN bus numbers.
 #define VOLVO_MAIN_BUS 0U
@@ -31,6 +32,7 @@ static const CanMsg VOLVO_EUCD_TX_MSGS[] = {
     // dominates via last-message-wins.
     {VOLVO_EUCD_FSM1,      VOLVO_MAIN_BUS, 8, .check_relay = false},
     {VOLVO_EUCD_FSM3,      VOLVO_MAIN_BUS, 8, .check_relay = false},
+    {VOLVO_EUCD_FSM4,      VOLVO_MAIN_BUS, 8, .check_relay = false},
   };
 
   // TODO: add counters
@@ -141,7 +143,7 @@ static bool volvo_fwd_hook(int bus_num, int addr) {
   // (longActive=False). Car behaves identically to stock during the
   // override. When gas released, block and OP TX resume together.
   if (bus_num == VOLVO_CAM_BUS && controls_allowed && !gas_pressed) {
-    if (addr == VOLVO_EUCD_FSM1 || addr == VOLVO_EUCD_FSM3) {
+    if (addr == VOLVO_EUCD_FSM1 || addr == VOLVO_EUCD_FSM3 || addr == VOLVO_EUCD_FSM4) {
       return true;
     }
   }

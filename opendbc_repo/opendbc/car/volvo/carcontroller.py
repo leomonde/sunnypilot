@@ -2,6 +2,7 @@ import numpy as np
 from opendbc.can import CANPacker
 from openpilot.common.realtime import DT_CTRL
 from opendbc.car import Bus, structs
+from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.lateral import apply_std_steer_angle_limits
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.volvo import volvocan
@@ -181,6 +182,14 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         virt_b1 = max(235, min(250, int(235 + (80 - virt_dist_int) * 0.333)))
         can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, True,
                                                virt_dist=virt_dist_int, virt_b1=virt_b1))
+
+        # FSM4 virtual lead speed: when decelerating, set lead speed below vEgo
+        # to create a closing rate the ECM needs before it will command braking.
+        if accel < -0.10:
+          virt_lead_kmh = max(0.0, CS.out.vEgo * CV.MS_TO_KPH + accel * 2.0 * CV.MS_TO_KPH)
+          can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4, virt_lead_kmh))
+        else:
+          can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4))
       else:
         self.op_standstill_frames = 0
         acc_standstill = None  # pass stock ACC_Standstill through
@@ -193,6 +202,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         # drift virt_dist back to 255 so the next longActive period starts neutral
         self.virt_dist = min(255.0, self.virt_dist + 10.0)
         can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, CC.longActive))
+        can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4))
 
       can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, accel, acc_check, acc_standstill))
 
