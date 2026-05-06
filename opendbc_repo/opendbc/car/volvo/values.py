@@ -34,6 +34,11 @@ class CarControllerParams:
   ACCEL_MIN = -4.0  # m/s^2
   ACCEL_MAX = 2.0   # m/s^2
 
+  # FSM4 virtual lead speed projection window (seconds).
+  # closing_rate = abs(accel) × FSM4_LEAD_LOOKAHEAD_S × 3.6 km/h
+  # Increase to get more aggressive ECM braking for the same accel request.
+  FSM4_LEAD_LOOKAHEAD_S = 2.0
+
   def __init__(self, CP):
     can_define = CANDefine(DBC[CP.carFingerprint][Bus.pt])
 

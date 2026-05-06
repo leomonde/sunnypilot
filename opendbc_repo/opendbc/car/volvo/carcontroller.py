@@ -186,7 +186,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         # FSM4 virtual lead speed: when decelerating, set lead speed below vEgo
         # to create a closing rate the ECM needs before it will command braking.
         if accel < -0.10:
-          virt_lead_kmh = max(0.0, CS.out.vEgo * CV.MS_TO_KPH + accel * 2.0 * CV.MS_TO_KPH)
+          virt_lead_kmh = max(0.0, CS.out.vEgo * CV.MS_TO_KPH + accel * CarControllerParams.FSM4_LEAD_LOOKAHEAD_S * CV.MS_TO_KPH)
           can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4, virt_lead_kmh))
         else:
           can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4))
