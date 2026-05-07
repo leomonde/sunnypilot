@@ -1,3 +1,20 @@
+def create_fsm0(packer, stock_fsm0, front_car_override=None):
+  # Pass stock FSM0 through, optionally overriding ACC_FrontCar.
+  # Byte_0 (rolling counter) and Byte_7 (checksum) are preserved from stock;
+  # analysis of raw frames confirmed byte7 does NOT depend on byte2 signals
+  # (ACC_FrontCar/Available/Enabled), so flipping ACC_FrontCar is checksum-safe.
+  # Byte_2_hi (bit23 of byte2) is always 1 in observed data — hardcoded.
+  values = {s: stock_fsm0[s] for s in (
+    "Byte_0", "Byte_1",
+    "ACC_Available", "ACC_Enabled",
+    "ACC_BrakeAlert",
+    "Byte_4", "Byte_5", "Byte_6", "Byte_7",
+  )}
+  values["Byte_2_hi"] = 1  # bit23 of byte2 — always 1 in stock cam data
+  values["ACC_FrontCar"] = int(front_car_override) if front_car_override is not None else int(stock_fsm0["ACC_FrontCar"])
+  return packer.make_can_msg("FSM0", 0, values)
+
+
 def create_button_msg(packer, resume=False, cancel=False, set_plus=False, minus=False, bus=0):
   # TODO: validate
   msg = {

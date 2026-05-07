@@ -104,6 +104,7 @@ class CarState(CarStateBase):
     ret.seatbeltUnlatched = False
 
     self.pscm_stock_values = pt_cp.vl["PSCM1"]
+    self.stock_FSM0 = copy.copy(cam_cp.vl["FSM0"])
     self.stock_FSM1 = copy.copy(cam_cp.vl["FSM1"])
     self.stock_FSM3 = copy.copy(cam_cp.vl["FSM3"])
     self.stock_FSM4 = copy.copy(cam_cp.vl["FSM4"])
@@ -131,7 +132,7 @@ class CarState(CarStateBase):
     ]
 
     cam_messages = [
-      ("FSM0", 100),
+      ("FSM0", 100),  # ACC state + FrontCar; OP overrides ACC_FrontCar when simulating virtual lead
       ("FSM1", 50),
       ("FSM3", 50),
       ("FSM4", 33),

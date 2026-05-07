@@ -222,6 +222,15 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       else:
         can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4))
 
+    # FSM0 at 100Hz — same rate as stock cam. Override ACC_FrontCar=1 whenever OP has
+    # an active virtual lead (FSM1 virt_dist < 255), so ECM grants hydraulic-brake authority.
+    # Byte_0 (rolling counter) and Byte_7 (checksum) are passed from stock unchanged —
+    # log analysis confirmed byte7 does not cover byte2, so ACC_FrontCar override is checksum-safe.
+    virt_lead_active = (self.CP.openpilotLongitudinalControl and CC.longActive
+                        and int(round(self.virt_dist)) < 255)
+    can_sends.append(volvocan.create_fsm0(self.packer_pt, CS.stock_FSM0,
+                                          front_car_override=1 if virt_lead_active else None))
+
     # Intelligent Cruise Button Management
     can_sends.extend(IntelligentCruiseButtonManagementInterface.update(self, CC_SP, CS, self.packer_pt, self.frame, self.last_button_frame))
 
