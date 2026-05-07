@@ -41,7 +41,12 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
 
     # wall-clock gate for FSM3/FSM1 TX — frame%2 unreliable due to controlsd jitter (drive 41)
     self.next_long_tx_nanos = 0
-    self.LONG_TX_PERIOD_NANOS = 20_000_000  # 50Hz, matching stock
+    self.LONG_TX_PERIOD_NANOS = 20_000_000  # 50Hz, matching stock FSM3/FSM1
+
+    # wall-clock gate for FSM4 TX — stock cam sends FSM4 at 33Hz, not 50Hz (drive 4e1)
+    self.next_fsm4_tx_nanos = 0
+    self.FSM4_TX_PERIOD_NANOS = 30_000_000  # 33Hz, matching stock
+    self.last_op_accel = 0.0  # last computed accel, used by 33Hz FSM4 block
 
     self.sng_ack_frames = 0  # remaining FSM3 TXs with ACC_Check=1 during resume blast
 
@@ -182,14 +187,6 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         virt_b1 = max(235, min(250, int(235 + (80 - virt_dist_int) * 0.333)))
         can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, True,
                                                virt_dist=virt_dist_int, virt_b1=virt_b1))
-
-        # FSM4 virtual lead speed: when decelerating, set lead speed below vEgo
-        # to create a closing rate the ECM needs before it will command braking.
-        if accel < -0.10:
-          virt_lead_kmh = max(0.0, CS.out.vEgo * CV.MS_TO_KPH + accel * CarControllerParams.FSM4_LEAD_LOOKAHEAD_S * CV.MS_TO_KPH)
-          can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4, virt_lead_kmh))
-        else:
-          can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4))
       else:
         self.op_standstill_frames = 0
         acc_standstill = None  # pass stock ACC_Standstill through
@@ -202,9 +199,28 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         # drift virt_dist back to 255 so the next longActive period starts neutral
         self.virt_dist = min(255.0, self.virt_dist + 10.0)
         can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, CC.longActive))
-        can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4))
+
+      # store accel for use by 33Hz FSM4 block below
+      self.last_op_accel = accel
 
       can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, accel, acc_check, acc_standstill))
+
+    # FSM4 virtual lead speed at 33Hz — matches stock cam rate to avoid ECM frequency faults (drive 4e1)
+    # Decoupled from FSM3/FSM1 50Hz timer; uses last_op_accel updated each long_tx tick.
+    fsm4_tx_due = now_nanos >= self.next_fsm4_tx_nanos
+    if fsm4_tx_due:
+      next_fsm4 = self.next_fsm4_tx_nanos + self.FSM4_TX_PERIOD_NANOS
+      if self.next_fsm4_tx_nanos == 0 or next_fsm4 <= now_nanos:
+        next_fsm4 = now_nanos + self.FSM4_TX_PERIOD_NANOS
+      self.next_fsm4_tx_nanos = next_fsm4
+
+      # FSM4 virtual lead speed: when decelerating, set lead speed below vEgo
+      # to create a closing rate the ECM needs before it will command braking.
+      if self.CP.openpilotLongitudinalControl and CC.longActive and self.last_op_accel < -0.10:
+        virt_lead_kmh = max(0.0, CS.out.vEgo * CV.MS_TO_KPH + self.last_op_accel * CarControllerParams.FSM4_LEAD_LOOKAHEAD_S * CV.MS_TO_KPH)
+        can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4, virt_lead_kmh))
+      else:
+        can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4))
 
     # Intelligent Cruise Button Management
     can_sends.extend(IntelligentCruiseButtonManagementInterface.update(self, CC_SP, CS, self.packer_pt, self.frame, self.last_button_frame))
