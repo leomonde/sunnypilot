@@ -22,9 +22,9 @@
 static const CanMsg VOLVO_EUCD_TX_MSGS[] = {
     {VOLVO_EUCD_CCButtons, VOLVO_MAIN_BUS, 8, .check_relay = false},
     {VOLVO_EUCD_PSCM1,     VOLVO_CAM_BUS,  8, .check_relay = true},   // OP replaces stock steering servo state
-    {VOLVO_EUCD_FSM0,      VOLVO_MAIN_BUS, 8, .check_relay = false},  // OP overlays ACC_FrontCar when virtual lead active
+    {VOLVO_EUCD_FSM0,      VOLVO_MAIN_BUS, 8, .check_relay = true},   // OP replaces stock FSM0: exclusive ACC_FrontCar control
     {VOLVO_EUCD_FSM2,      VOLVO_MAIN_BUS, 8, .check_relay = true},   // OP replaces stock LKA command
-    // FSM1 / FSM3: DO NOT block forwarding. Stock cam FSM1/FSM3 carry a
+    // FSM1 / FSM3: DO NOT use relay blocking. Stock cam FSM1/FSM3 carry a
     // 5-frame rolling counter pattern the car's ECM validates; intercepting
     // and replaying with passthrough delay causes the ECM to fault out after
     // ~30s (observed in drive 27 seg 0). Instead we allow stock to flow
@@ -33,7 +33,7 @@ static const CanMsg VOLVO_EUCD_TX_MSGS[] = {
     // dominates via last-message-wins.
     {VOLVO_EUCD_FSM1,      VOLVO_MAIN_BUS, 8, .check_relay = false},
     {VOLVO_EUCD_FSM3,      VOLVO_MAIN_BUS, 8, .check_relay = false},
-    {VOLVO_EUCD_FSM4,      VOLVO_MAIN_BUS, 8, .check_relay = false},
+    {VOLVO_EUCD_FSM4,      VOLVO_MAIN_BUS, 8, .check_relay = true},   // OP replaces stock FSM4: exclusive virtual lead speed control
   };
 
   // TODO: add counters
@@ -142,8 +142,11 @@ static bool volvo_fwd_hook(int bus_num, int addr) {
   // reaches the ECM at 50Hz with correct timing. OP also stops TXing
   // (longActive=False). Car behaves identically to stock during the
   // override. When gas released, block and OP TX resume together.
+  // FSM0 and FSM4 are relay-blocked (check_relay=true in TX_MSGS), so no fwd_hook needed.
+  // FSM1 and FSM3 use last-message-wins (rolling counter must flow from stock cam);
+  // block dynamically only when OP is actively controlling long.
   if (bus_num == VOLVO_CAM_BUS && controls_allowed && !gas_pressed) {
-    if (addr == VOLVO_EUCD_FSM0 || addr == VOLVO_EUCD_FSM1 || addr == VOLVO_EUCD_FSM3 || addr == VOLVO_EUCD_FSM4) {
+    if (addr == VOLVO_EUCD_FSM1 || addr == VOLVO_EUCD_FSM3) {
       return true;
     }
   }
