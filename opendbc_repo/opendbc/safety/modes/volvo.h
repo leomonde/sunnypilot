@@ -41,6 +41,8 @@ static const CanMsg VOLVO_EUCD_TX_MSGS[] = {
     {.msg = {{VOLVO_EUCD_AccPedal,      VOLVO_MAIN_BUS, 8, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .frequency = 100U}, { 0 }, { 0 }}},
     {.msg = {{VOLVO_EUCD_VehicleSpeed1, VOLVO_MAIN_BUS, 8, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .frequency = 50U}, { 0 }, { 0 }}},
     {.msg = {{VOLVO_EUCD_Brake_Info,    VOLVO_MAIN_BUS, 8, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .frequency = 50U}, { 0 }, { 0 }}},
+    {.msg = {{VOLVO_EUCD_FSM0,          VOLVO_CAM_BUS,  8, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .frequency = 100U}, { 0 }, { 0 }}},
+    {.msg = {{VOLVO_EUCD_PSCM1,         VOLVO_MAIN_BUS, 8, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true, .frequency = 50U}, { 0 }, { 0 }}},
   };
 
 static void volvo_rx_hook(const CANPacket_t *msg) {
@@ -62,6 +64,14 @@ static void volvo_rx_hook(const CANPacket_t *msg) {
       // Signal: BrakePedal
       brake_pressed = ((GET_BYTES(msg, 2, 1) & 0x0CU) >> 2U) == 2U;
     }
+
+    if (msg->addr == VOLVO_EUCD_PSCM1) {
+      // Signal: SteeringAngleServo: byte2<<8|byte3, scale=0.0447, offset=-1465
+      // Store as degrees * 100 (angle_deg_to_can=100) for rate-limit checks.
+      int raw_angle = ((int)GET_BYTES(msg, 2, 1) << 8) | (int)GET_BYTES(msg, 3, 1);
+      int angle_can = (raw_angle * 447) / 100 - 146500;  // max raw=65535: 65535*447=29M < INT32_MAX
+      update_sample(&angle_meas, angle_can);
+    }
   } else if (msg->bus == VOLVO_CAM_BUS) {
     if (msg->addr == VOLVO_EUCD_FSM0) {
       // Signal: ACC_Enabled (bit 2 of byte 2, from ACCStatus == 6 || 7)
@@ -82,6 +92,17 @@ static bool volvo_tx_hook(const CANPacket_t *msg) {
     .inactive_accel = 0,
   };
 
+  // Angle steering limits for FSM2 LKA.
+  // inactive_angle_is_zero=true: ECU ignores LKAAngleReq when LKASteerDirection=0;
+  // carcontroller always sends angle=0 in inactive mode, so we enforce zero.
+  const AngleSteeringLimits VOLVO_ANGLE_LIMITS = {
+    .max_angle = 4500,        // 45 deg * 100
+    .angle_deg_to_can = 100.0f,
+    .angle_rate_up_lookup = {{0.f, 5.f, 15.f}, {5.f, .8f, .15f}},
+    .angle_rate_down_lookup = {{0.f, 5.f, 15.f}, {5.f, 3.5f, .4f}},
+    .inactive_angle_is_zero = true,
+  };
+
   bool tx = true;
   bool violation = false;
 
@@ -95,13 +116,13 @@ static bool volvo_tx_hook(const CANPacket_t *msg) {
 
   // Safety check for Lane Keep Assist action.
   if (msg->addr == VOLVO_EUCD_FSM2) {
-    // Signal: LKASteerDirection
-    unsigned int mode = GET_BYTES(msg, 5, 1) & 0x03U;
-    bool lka_active = mode != 0U;
-
-    if (lka_active && !controls_allowed) {
-      violation = true;
-    }
+    // Signal: LKASteerDirection — byte5 bits 1-0
+    bool lka_active = (GET_BYTES(msg, 5, 1) & 0x03U) != 0U;
+    // Signal: LKAAngleReq — (byte3 & 0x3F)<<8 | byte4, scale=0.04, offset=-327.68
+    // angle_can = raw * 4 - 32768 (degrees * 100, matching angle_deg_to_can=100)
+    int raw_angle = (int)((GET_BYTES(msg, 3, 1) & 0x3FU) << 8) | (int)GET_BYTES(msg, 4, 1);
+    int desired_angle = raw_angle * 4 - 32768;
+    violation |= steer_angle_cmd_checks(desired_angle, lka_active, VOLVO_ANGLE_LIMITS);
   }
 
   // Longitudinal control: gate on controls_allowed + range check.
