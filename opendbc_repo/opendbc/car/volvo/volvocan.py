@@ -130,6 +130,13 @@ def create_radar(packer, stock_fsm1, long_active, virt_dist=None, virt_b1=None):
   if virt_dist is not None and virt_dist < int(stock_fsm1["ACC_Distance"]):
     values["ACC_Distance"] = virt_dist
     values["ACC_LeadConf"] = virt_b1 if virt_b1 is not None else 0xeb
-    if values["ACC_TargetState"] == 0:
-      values["ACC_TargetState"] = 0xb8  # "tracked target"; avoids inconsistent FSM1 payload
+    # Always force consistent "tracked target" values in FSM1.
+    # Stock cam alternates between two frame types — one with tgt=0xb8/Byte_4=0x49/Byte_6=0x74
+    # (valid lead data) and one with tgt=0x00/Byte_4=0x00/Byte_6=0x14 (no-target state).
+    # When OP overrides only tgt→0xb8 on the no-target frame, B4=0x00 and B6=0x14 remain,
+    # creating an inconsistency the ECM detects and uses to deny hydraulic-brake authority
+    # (log analysis confirmed: 50% of OP-sent FSM1 had this mismatch during virtual-lead braking).
+    values["ACC_TargetState"] = 0xb8
+    values["Byte_4"] = 0x49  # observed constant in all valid-lead frames (drive 5b8/seg8)
+    values["Byte_6"] = 0x74  # observed constant in all valid-lead frames (drive 5b8/seg8)
   return packer.make_can_msg("FSM1", 0, values)
