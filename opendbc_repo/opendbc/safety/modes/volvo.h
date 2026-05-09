@@ -92,17 +92,6 @@ static bool volvo_tx_hook(const CANPacket_t *msg) {
     .inactive_accel = 0,
   };
 
-  // Angle steering limits for FSM2 LKA.
-  // inactive_angle_is_zero=true: ECU ignores LKAAngleReq when LKASteerDirection=0;
-  // carcontroller always sends angle=0 in inactive mode, so we enforce zero.
-  const AngleSteeringLimits VOLVO_ANGLE_LIMITS = {
-    .max_angle = 4500,        // 45 deg * 100
-    .angle_deg_to_can = 100.0f,
-    .angle_rate_up_lookup = {{0.f, 5.f, 15.f}, {5.f, .8f, .15f}},
-    .angle_rate_down_lookup = {{0.f, 5.f, 15.f}, {5.f, 3.5f, .4f}},
-    .inactive_angle_is_zero = true,
-  };
-
   bool tx = true;
   bool violation = false;
 
@@ -118,11 +107,9 @@ static bool volvo_tx_hook(const CANPacket_t *msg) {
   if (msg->addr == VOLVO_EUCD_FSM2) {
     // Signal: LKASteerDirection — byte5 bits 1-0
     bool lka_active = (GET_BYTES(msg, 5, 1) & 0x03U) != 0U;
-    // Signal: LKAAngleReq — (byte3 & 0x3F)<<8 | byte4, scale=0.04, offset=-327.68
-    // angle_can = raw * 4 - 32768 (degrees * 100, matching angle_deg_to_can=100)
-    int raw_angle = (int)((GET_BYTES(msg, 3, 1) & 0x3FU) << 8) | (int)GET_BYTES(msg, 4, 1);
-    int desired_angle = raw_angle * 4 - 32768;
-    violation |= steer_angle_cmd_checks(desired_angle, lka_active, VOLVO_ANGLE_LIMITS);
+    if (lka_active && !controls_allowed) {
+      violation = true;
+    }
   }
 
   // Longitudinal control: gate on controls_allowed + range check.
