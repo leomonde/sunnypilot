@@ -184,9 +184,8 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           target_dist = 255.0
         self.virt_dist += max(-10.0, min(10.0, target_dist - self.virt_dist))
         virt_dist_int = int(round(self.virt_dist))
-        virt_b1 = max(235, min(250, int(235 + (80 - virt_dist_int) * 0.333)))
         can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, True,
-                                               virt_dist=virt_dist_int, virt_b1=virt_b1))
+                                               virt_dist=virt_dist_int, virt_b1=0xF6))
       else:
         self.op_standstill_frames = 0
         acc_standstill = None  # pass stock ACC_Standstill through
