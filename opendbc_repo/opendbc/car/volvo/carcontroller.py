@@ -176,9 +176,9 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         if self.sng_ack_frames > 0:
           self.sng_ack_frames -= 1
 
-        # virtual lead: knee at -0.15 m/s² → dist 80, saturates at -0.80 m/s² → dist 35
-        if accel < -0.15:
-          frac = min(1.0, (abs(accel) - 0.15) / 0.65)
+        # virtual lead: starts at -0.05 m/s² → dist 80, saturates at -0.80 m/s² → dist 35
+        if accel < -0.05:
+          frac = min(1.0, (abs(accel) - 0.05) / 0.75)
           target_dist = 80.0 - frac * 45.0
         else:
           target_dist = 255.0
@@ -216,7 +216,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
 
       # FSM4 virtual lead speed: when decelerating, set lead speed below vEgo
       # to create a closing rate the ECM needs before it will command braking.
-      if self.CP.openpilotLongitudinalControl and CC.longActive and self.last_op_accel < -0.10:
+      if self.CP.openpilotLongitudinalControl and CC.longActive and self.last_op_accel < -0.05:
         virt_lead_kmh = max(0.0, CS.out.vEgo * CV.MS_TO_KPH + self.last_op_accel * CarControllerParams.FSM4_LEAD_LOOKAHEAD_S * CV.MS_TO_KPH)
         can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4, virt_lead_kmh))
       else:

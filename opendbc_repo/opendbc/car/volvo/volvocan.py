@@ -91,6 +91,10 @@ def create_longitudinal(packer, stock_fsm3, accel, acc_check, acc_standstill=Non
     "ACC_AccelerationRequest": accel,
     "ACC_Check": acc_check,
   }
+  # Byte_5 bit1 (0x02): braking authority flag observed in stock cam when decelerating.
+  # Without it the ECM ignores negative AccelerationRequest even with a virtual lead.
+  if accel < 0:
+    values["Byte_5"] = int(stock_fsm3["Byte_5"]) | 0x02
   return packer.make_can_msg("FSM3", 0, values)
 
 
