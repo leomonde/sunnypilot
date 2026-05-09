@@ -381,7 +381,7 @@ class Updater:
       ["git", "checkout", "--force", "--no-recurse-submodules", "-B", branch, "FETCH_HEAD"],
       ["git", "branch", "--set-upstream-to", f"origin/{branch}"],
       ["git", "reset", "--hard"],
-      ["git", "clean", "-xdff", "-e", "panda/board/obj/"],
+      ["git", "clean", "-xdff"],
       ["git", "submodule", "sync"],
       ["git", "submodule", "update", "--init", "--recursive"],
       ["git", "submodule", "foreach", "--recursive", "git", "reset", "--hard"],

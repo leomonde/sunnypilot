@@ -95,5 +95,3 @@ SKILL.md
 !.idea/tools/*
 !.run/*
 
-# panda compiled binaries — build locally with 'scons -u -j4 -C panda'
-panda/board/obj/
