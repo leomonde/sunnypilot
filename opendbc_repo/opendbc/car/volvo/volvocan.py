@@ -130,13 +130,14 @@ def create_radar(packer, stock_fsm1, long_active, virt_dist=None, virt_b1=None):
   if virt_dist is not None and virt_dist < int(stock_fsm1["ACC_Distance"]):
     values["ACC_Distance"] = virt_dist
     values["ACC_LeadConf"] = virt_b1 if virt_b1 is not None else 0xeb
-    # Always force consistent "tracked target" values in FSM1.
-    # Stock cam alternates between two frame types — one with tgt=0xb8/Byte_4=0x49/Byte_6=0x74
-    # (valid lead data) and one with tgt=0x00/Byte_4=0x00/Byte_6=0x14 (no-target state).
-    # When OP overrides only tgt→0xb8 on the no-target frame, B4=0x00 and B6=0x14 remain,
-    # creating an inconsistency the ECM detects and uses to deny hydraulic-brake authority
-    # (log analysis confirmed: 50% of OP-sent FSM1 had this mismatch during virtual-lead braking).
-    values["ACC_TargetState"] = 0xb8
-    values["Byte_4"] = 0x49  # observed constant in all valid-lead frames (drive 5b8/seg8)
-    values["Byte_6"] = 0x74  # observed constant in all valid-lead frames (drive 5b8/seg8)
+    # Always force consistent "confirmed-track" values in FSM1.
+    # 0xBC (not 0xB8): log analysis (drive 53d segs 19-21) showed that every braking event
+    # the ECM accepted had ACC_TargetState=0xBC, while virtual-lead frames with 0xB8 produced
+    # zero ECM-authorized hydraulic braking across hundreds of decel commands.
+    # 0xBC = 0xB8 | 0x04 — the extra bit appears to be the "confirmed tracked target" flag
+    # that grants hydraulic-brake authority. B4/B6 are the companion bytes always present
+    # in stock valid-lead frames; omitting them creates inconsistency the ECM rejects.
+    values["ACC_TargetState"] = 0xbc
+    values["Byte_4"] = 0x49
+    values["Byte_6"] = 0x74
   return packer.make_can_msg("FSM1", 0, values)

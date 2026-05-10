@@ -176,16 +176,18 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         if self.sng_ack_frames > 0:
           self.sng_ack_frames -= 1
 
-        # virtual lead: starts at -0.05 m/s² → dist 80, saturates at -0.80 m/s² → dist 35
+        # virtual lead: starts at -0.05 m/s² → dist 60, saturates at -0.80 m/s² → dist 15
+        # Log analysis (drive 53d segs 19-21) confirmed ECM authorizes braking only below ~20m;
+        # the previous 35m floor was above the ECM's threshold and produced zero hydraulic braking.
         if accel < -0.05:
           frac = min(1.0, (abs(accel) - 0.05) / 0.75)
-          target_dist = 80.0 - frac * 45.0
+          target_dist = 60.0 - frac * 45.0
         else:
           target_dist = 255.0
         self.virt_dist += max(-10.0, min(10.0, target_dist - self.virt_dist))
         virt_dist_int = int(round(self.virt_dist))
         can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, True,
-                                               virt_dist=virt_dist_int, virt_b1=0xF6))
+                                               virt_dist=virt_dist_int, virt_b1=0xFF))
       else:
         self.op_standstill_frames = 0
         acc_standstill = None  # pass stock ACC_Standstill through
