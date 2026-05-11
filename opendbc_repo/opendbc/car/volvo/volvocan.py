@@ -91,10 +91,11 @@ def create_longitudinal(packer, stock_fsm3, accel, acc_check, acc_standstill=Non
     "ACC_AccelerationRequest": accel,
     "ACC_Check": acc_check,
   }
-  # Byte_5 bit1 (0x02): braking authority flag observed in stock cam when decelerating.
-  # Without it the ECM ignores negative AccelerationRequest even with a virtual lead.
-  if accel < 0:
-    values["Byte_5"] = int(stock_fsm3["Byte_5"]) | 0x02
+  # Byte_5 passes through from stock unchanged.
+  # Log analysis (drive 54c seg 1) showed stock sends B5=0x02 when ACCELERATING (+1.6 m/s²),
+  # not when braking — the previous | 0x02 override was semantically wrong and set it
+  # persistently during all negative accel, while stock only sets it momentarily as part
+  # of an internal state pattern. Persistent B5=0x02 during braking triggered an ACC fault.
   return packer.make_can_msg("FSM3", 0, values)
 
 
