@@ -130,14 +130,14 @@ def create_radar(packer, stock_fsm1, long_active, virt_dist=None, virt_b1=None):
   if virt_dist is not None and virt_dist < int(stock_fsm1["ACC_Distance"]):
     values["ACC_Distance"] = virt_dist
     values["ACC_LeadConf"] = virt_b1 if virt_b1 is not None else 0xeb
-    # Always force consistent "confirmed-track" values in FSM1.
-    # 0xBC (not 0xB8): log analysis (drive 53d segs 19-21) showed that every braking event
-    # the ECM accepted had ACC_TargetState=0xBC, while virtual-lead frames with 0xB8 produced
-    # zero ECM-authorized hydraulic braking across hundreds of decel commands.
-    # 0xBC = 0xB8 | 0x04 — the extra bit appears to be the "confirmed tracked target" flag
-    # that grants hydraulic-brake authority. B4/B6 are the companion bytes always present
-    # in stock valid-lead frames; omitting them creates inconsistency the ECM rejects.
-    values["ACC_TargetState"] = 0xbc
+    # Stock FSM1: tgt=0xB8 during approach, tgt=0xBC only when close (dist≤12m).
+    # Log analysis (drive 53d segs 19-21): stock sends BC at dist=4-106m, but only after
+    # a gradual tracked approach — never at large distances like 200-250m.
+    # Sending BC at 250m (as the old drift-in code did) triggers an ECM fault because
+    # BC at that range is physically impossible/inconsistent. Match stock: B8 during
+    # approach, BC only once the virtual lead is genuinely close.
+    # B4/B6 companion bytes are present in every stock valid-lead frame.
+    values["ACC_TargetState"] = 0xbc if virt_dist <= 12 else 0xb8
     values["Byte_4"] = 0x49
     values["Byte_6"] = 0x74
   return packer.make_can_msg("FSM1", 0, values)
