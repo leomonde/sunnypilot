@@ -176,14 +176,24 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         if self.sng_ack_frames > 0:
           self.sng_ack_frames -= 1
 
-        # virtual lead: starts at -0.05 m/s² → dist 60, saturates at -0.80 m/s² → dist 20
-        # TEST1: floor=20m, tgt=B8 always — baseline to confirm no ACC fault before adding BC
+        # TEST2: kinematic virtual lead — FSM1 dist moves consistently with FSM4 lead speed.
+        # Phase 1 (virt_dist > target): drift toward target at 10m/frame (fast initial approach).
+        # Phase 2 (virt_dist <= target): decrease at closing_rate = vEgo - virt_lead_ms,
+        # same formula as FSM4, so FSM1 dist and FSM4 lead_speed are always consistent.
+        # Root cause of TEST1 fault: dist stuck at 20m while ECM expected it to decrease
+        # at 2.2 m/s closing rate → kinematic inconsistency after ~3s.
         if accel < -0.05:
           frac = min(1.0, (abs(accel) - 0.05) / 0.75)
-          target_dist = 60.0 - frac * 40.0
+          target_dist = 60.0 - frac * 40.0  # 20m floor at max decel
+          if self.virt_dist > target_dist:
+            self.virt_dist += max(-10.0, min(10.0, target_dist - self.virt_dist))
+          else:
+            virt_lead_ms = max(0.0, CS.out.vEgo + accel * CarControllerParams.FSM4_LEAD_LOOKAHEAD_S)
+            closing_rate = CS.out.vEgo - virt_lead_ms
+            self.virt_dist -= closing_rate * (self.LONG_TX_PERIOD_NANOS / 1e9)
+            self.virt_dist = max(8.0, self.virt_dist)
         else:
-          target_dist = 255.0
-        self.virt_dist += max(-10.0, min(10.0, target_dist - self.virt_dist))
+          self.virt_dist = min(255.0, self.virt_dist + 10.0)
         virt_dist_int = int(round(self.virt_dist))
         can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, True,
                                                virt_dist=virt_dist_int, virt_b1=0xFF))
