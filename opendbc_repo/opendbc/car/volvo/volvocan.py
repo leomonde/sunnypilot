@@ -138,7 +138,7 @@ def create_radar(packer, stock_fsm1, long_active, virt_dist=None, virt_b1=None):
     # BC at that range is physically impossible/inconsistent. Match stock: B8 during
     # approach, BC only once the virtual lead is genuinely close.
     # B4/B6 companion bytes are present in every stock valid-lead frame.
-    values["ACC_TargetState"] = 0xbc if virt_dist <= 12 else 0xb8
+    values["ACC_TargetState"] = 0xb8  # TEST1: B8 always, no BC yet
     values["Byte_4"] = 0x49
     values["Byte_6"] = 0x74
   return packer.make_can_msg("FSM1", 0, values)

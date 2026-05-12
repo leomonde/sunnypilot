@@ -176,12 +176,11 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         if self.sng_ack_frames > 0:
           self.sng_ack_frames -= 1
 
-        # virtual lead: starts at -0.05 m/s² → dist 50, saturates at -0.80 m/s² → dist 8
-        # Floor is 8m so the virtual lead crosses the ≤12m BC threshold at high decel,
-        # matching stock FSM1 confirmed-track state transitions (drive 53d segs 19-21).
+        # virtual lead: starts at -0.05 m/s² → dist 60, saturates at -0.80 m/s² → dist 20
+        # TEST1: floor=20m, tgt=B8 always — baseline to confirm no ACC fault before adding BC
         if accel < -0.05:
           frac = min(1.0, (abs(accel) - 0.05) / 0.75)
-          target_dist = 50.0 - frac * 42.0
+          target_dist = 60.0 - frac * 40.0
         else:
           target_dist = 255.0
         self.virt_dist += max(-10.0, min(10.0, target_dist - self.virt_dist))
