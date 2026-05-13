@@ -115,6 +115,8 @@ def create_fsm4(packer, stock_fsm4, lead_speed_kmh=None, virt_b2=None):
   if virt_b2 is not None:
     values["Byte_2"] = int(virt_b2)
     values["Byte_4"] = 0x8b
+    values["Byte_5"] = 0xf3  # moving lead range (~62208 combined with B6=0x00)
+    values["Byte_6"] = 0x00
   return packer.make_can_msg("FSM4", 0, values)
 
 
@@ -144,9 +146,9 @@ def create_radar(packer, stock_fsm1, long_active, virt_dist=None, virt_b1=None):
   if virt_dist is not None and stock_dist >= 200 and virt_dist < stock_dist:
     values["ACC_Distance"] = virt_dist
     values["ACC_LeadConf"] = virt_b1 if virt_b1 is not None else 0xeb
-    # TEST4: escalate to 0xBC when dist ≤ 12m — ECM only authorizes hydraulic braking
-    # with "confirmed close" state; 0xB8 (tracked) is not enough for braking authority.
-    values["ACC_TargetState"] = 0xbc if virt_dist <= 12 else 0xb8
+    # TEST8: escalate to 0xBC when dist ≤ 20m — Phase 1 ends at target_dist=20m (max decel),
+    # so BC is set immediately when Phase 2 begins; prevents ECM timeout fault (drive 55e).
+    values["ACC_TargetState"] = 0xbc if virt_dist <= 20 else 0xb8
     values["Byte_4"] = 0x49
     values["Byte_6"] = 0x74
   return packer.make_can_msg("FSM1", 0, values)

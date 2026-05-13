@@ -191,9 +191,9 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
             self.virt_dist -= closing_rate * (self.LONG_TX_PERIOD_NANOS / 1e9)
             self.virt_dist = max(8.0, self.virt_dist)
         else:
-          # TEST6: drift toward 100m cruise distance (not 255) — keeps ECM in lead-following
-          # mode even when not braking, so ECM doesn't revert to Cruise Mode and ignore OP.
-          self.virt_dist = min(100.0, self.virt_dist + 10.0)
+          # TEST8: drift toward 40m cruise distance — ECM engages lead-following mode sooner
+          # than 100m; verified that 100m with 2 km/h closing kept ECM in Cruise Mode (drive 55e).
+          self.virt_dist = min(40.0, self.virt_dist + 10.0)
         virt_dist_int = int(round(self.virt_dist))
         can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, True,
                                                virt_dist=virt_dist_int, virt_b1=0xFF))
@@ -244,7 +244,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     # Byte_0 (rolling counter) and Byte_7 (checksum) are passed from stock unchanged —
     # log analysis confirmed byte7 does not cover byte2, so ACC_FrontCar override is checksum-safe.
     virt_lead_active = (self.CP.openpilotLongitudinalControl and CC.longActive
-                        and int(round(self.virt_dist)) <= 100)
+                        and int(round(self.virt_dist)) <= 40)
     can_sends.append(volvocan.create_fsm0(self.packer_pt, CS.stock_FSM0,
                                           front_car_override=1 if virt_lead_active else None))
 
