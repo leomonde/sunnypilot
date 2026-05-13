@@ -224,10 +224,11 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         next_fsm4 = now_nanos + self.FSM4_TX_PERIOD_NANOS
       self.next_fsm4_tx_nanos = next_fsm4
 
-      # FSM4 virtual lead speed — always active when longActive to keep ECM in lead-following mode.
-      # Formula: vEgo + accel * lookahead → accel=0 → lead=vEgo (hold speed),
-      # accel<0 → lead slower than ego (ECM decelerates), accel>0 → lead faster (ECM accelerates).
-      if self.CP.openpilotLongitudinalControl and CC.longActive:
+      # FSM4 virtual lead speed — active when longActive AND no real lead (stock_dist>=200).
+      # When real lead present, pass stock FSM4 through so ECM sees the real lead speed.
+      # When no real lead: vEgo + accel*lookahead → accel=0 → hold, accel<0 → decel, accel>0 → accel.
+      no_real_lead = int(CS.stock_FSM1["ACC_Distance"]) >= 200
+      if self.CP.openpilotLongitudinalControl and CC.longActive and no_real_lead:
         virt_lead_kmh = max(0.0, CS.out.vEgo * CV.MS_TO_KPH + self.last_op_accel * CarControllerParams.FSM4_LEAD_LOOKAHEAD_S * CV.MS_TO_KPH)
         can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4, virt_lead_kmh))
       else:
