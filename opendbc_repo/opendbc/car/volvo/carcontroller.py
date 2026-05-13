@@ -229,8 +229,13 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       # When no real lead: vEgo + accel*lookahead → accel=0 → hold, accel<0 → decel, accel>0 → accel.
       no_real_lead = int(CS.stock_FSM1["ACC_Distance"]) >= 200
       if self.CP.openpilotLongitudinalControl and CC.longActive and no_real_lead:
-        virt_lead_kmh = max(0.0, CS.out.vEgo * CV.MS_TO_KPH + self.last_op_accel * CarControllerParams.FSM4_LEAD_LOOKAHEAD_S * CV.MS_TO_KPH)
-        can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4, virt_lead_kmh, virt_lead=True))
+        virt_lead_ms = max(0.0, CS.out.vEgo + self.last_op_accel * CarControllerParams.FSM4_LEAD_LOOKAHEAD_S)
+        virt_lead_kmh = virt_lead_ms * CV.MS_TO_KPH
+        closing_ms = max(0.0, CS.out.vEgo - virt_lead_ms)
+        # Byte_2 = TTC×10: verified against seg20/drive53d log data.
+        # Caps at 127 when closing≈0 (cruise, no approach) to stay below no-lead sentinel 0x82(130).
+        virt_b2 = min(127, round(self.virt_dist / closing_ms * 10)) if closing_ms > 0.1 else 127
+        can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4, virt_lead_kmh, virt_b2=virt_b2))
       else:
         can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4))
 

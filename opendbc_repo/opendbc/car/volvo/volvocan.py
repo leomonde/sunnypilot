@@ -99,21 +99,22 @@ def create_longitudinal(packer, stock_fsm3, accel, acc_check, acc_standstill=Non
   return packer.make_can_msg("FSM3", 0, values)
 
 
-def create_fsm4(packer, stock_fsm4, lead_speed_kmh=None, virt_lead=False):
+def create_fsm4(packer, stock_fsm4, lead_speed_kmh=None, virt_b2=None):
   # Pass stock FSM4 through, optionally overriding signals for a virtual lead.
-  # When virt_lead=True, override Byte_2 and Byte_4 to match "lead present" values
-  # observed in real-lead logs (drive 55a): Byte_2=0x66, Byte_4=0x8B.
-  # Without this, ECM sees FSM1 claiming a lead but FSM4 Byte_2=0x82 (no-lead sentinel)
-  # and faults on the cross-message inconsistency (drive TEST6).
+  # virt_b2: Byte_2 = TTC×10 (time-to-collision in seconds × 10), derived from
+  # log analysis (seg20 drive 53d): B2 matches dist_m / closing_m_s × 10 exactly.
+  # B2=0x82(130) is the no-lead sentinel; must be replaced when injecting virtual lead
+  # or ECM detects FSM1↔FSM4 cross-message inconsistency and faults.
+  # Byte_4=0x8B = lead present flag (0x8F = no lead).
   values = {s: stock_fsm4[s] for s in (
     "Byte_0", "Byte_1", "Byte_2", "ACC_LeadSpeed",
     "Byte_4", "Byte_5", "Byte_6", "Byte_7",
   )}
   if lead_speed_kmh is not None:
     values["ACC_LeadSpeed"] = max(0, int(round(lead_speed_kmh)))
-  if virt_lead:
-    values["Byte_2"] = 0x66  # "lead present" value observed in real-lead logs; 0x82=no-lead sentinel
-    values["Byte_4"] = 0x8b  # lead present flag (0x8B=lead, 0x8F=no lead)
+  if virt_b2 is not None:
+    values["Byte_2"] = int(virt_b2)
+    values["Byte_4"] = 0x8b
   return packer.make_can_msg("FSM4", 0, values)
 
 
