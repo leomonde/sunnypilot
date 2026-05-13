@@ -191,7 +191,9 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
             self.virt_dist -= closing_rate * (self.LONG_TX_PERIOD_NANOS / 1e9)
             self.virt_dist = max(8.0, self.virt_dist)
         else:
-          self.virt_dist = min(255.0, self.virt_dist + 10.0)
+          # TEST6: drift toward 100m cruise distance (not 255) — keeps ECM in lead-following
+          # mode even when not braking, so ECM doesn't revert to Cruise Mode and ignore OP.
+          self.virt_dist = min(100.0, self.virt_dist + 10.0)
         virt_dist_int = int(round(self.virt_dist))
         can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, True,
                                                virt_dist=virt_dist_int, virt_b1=0xFF))
@@ -222,9 +224,10 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         next_fsm4 = now_nanos + self.FSM4_TX_PERIOD_NANOS
       self.next_fsm4_tx_nanos = next_fsm4
 
-      # FSM4 virtual lead speed: when decelerating, set lead speed below vEgo
-      # to create a closing rate the ECM needs before it will command braking.
-      if self.CP.openpilotLongitudinalControl and CC.longActive and self.last_op_accel < -0.05:
+      # FSM4 virtual lead speed — always active when longActive to keep ECM in lead-following mode.
+      # Formula: vEgo + accel * lookahead → accel=0 → lead=vEgo (hold speed),
+      # accel<0 → lead slower than ego (ECM decelerates), accel>0 → lead faster (ECM accelerates).
+      if self.CP.openpilotLongitudinalControl and CC.longActive:
         virt_lead_kmh = max(0.0, CS.out.vEgo * CV.MS_TO_KPH + self.last_op_accel * CarControllerParams.FSM4_LEAD_LOOKAHEAD_S * CV.MS_TO_KPH)
         can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4, virt_lead_kmh))
       else:
@@ -235,7 +238,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     # Byte_0 (rolling counter) and Byte_7 (checksum) are passed from stock unchanged —
     # log analysis confirmed byte7 does not cover byte2, so ACC_FrontCar override is checksum-safe.
     virt_lead_active = (self.CP.openpilotLongitudinalControl and CC.longActive
-                        and int(round(self.virt_dist)) < 255)
+                        and int(round(self.virt_dist)) <= 100)
     can_sends.append(volvocan.create_fsm0(self.packer_pt, CS.stock_FSM0,
                                           front_car_override=1 if virt_lead_active else None))
 
