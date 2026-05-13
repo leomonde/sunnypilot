@@ -230,7 +230,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       no_real_lead = int(CS.stock_FSM1["ACC_Distance"]) >= 200
       if self.CP.openpilotLongitudinalControl and CC.longActive and no_real_lead:
         virt_lead_kmh = max(0.0, CS.out.vEgo * CV.MS_TO_KPH + self.last_op_accel * CarControllerParams.FSM4_LEAD_LOOKAHEAD_S * CV.MS_TO_KPH)
-        can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4, virt_lead_kmh))
+        can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4, virt_lead_kmh, virt_lead=True))
       else:
         can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4))
 
