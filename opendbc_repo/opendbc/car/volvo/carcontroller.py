@@ -176,7 +176,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         if self.sng_ack_frames > 0:
           self.sng_ack_frames -= 1
 
-        # TEST4: kinematic virtual lead — only injected when stock FSM1 has no real lead (tgt=0x00).
+        # TEST5: kinematic virtual lead — only injected when stock FSM1 has no real lead (dist>=200).
         # When stock already has a lead (0xB8/0xBC/0x04), ECM already has hydraulic-brake authority;
         # injecting B8 at a different distance breaks kinematic consistency and triggers fault (drive 553).
         # Kinematic movement: Phase 1 drift to target, Phase 2 decrease at closing_rate = vEgo - virt_lead_ms.

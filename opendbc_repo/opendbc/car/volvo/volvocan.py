@@ -128,13 +128,14 @@ def create_radar(packer, stock_fsm1, long_active, virt_dist=None, virt_b1=None):
     "Byte_6",
     "Byte_7",
   )}
-  stock_tgt = int(stock_fsm1["ACC_TargetState"])
-  # TEST3: only inject virtual lead when stock has NO real lead (tgt=0x00).
-  # Log analysis (drive 553 vs 556): when stock already tracks a lead (0xB8/0xBC/0x04),
-  # OP injecting B8 at a different distance breaks kinematic consistency and triggers
-  # ECM fault. When stock has a real lead, ECM already has hydraulic-brake authority —
-  # no injection needed. Virtual lead only needed when stock sees no target at all.
-  if virt_dist is not None and stock_tgt == 0x00 and virt_dist < int(stock_fsm1["ACC_Distance"]):
+  stock_dist = int(stock_fsm1["ACC_Distance"])
+  # TEST5: inject virtual lead only when stock has NO real lead (stock_dist >= 200 → dist=0xff).
+  # Stock FSM1 alternates two frame types (~100Hz combined): main frames (tgt=0xb8/0xbc/0x04,
+  # B4=0x49) and alt frames (tgt=0x00, B4=0x00). The prior gate (stock_tgt==0x00) only fired
+  # on alt frames (~10Hz), so ECM barely saw the virtual lead. Gate on dist instead: no real
+  # lead → dist=0xff (255); real lead → dist=35-110. When real lead present (stock_dist<200),
+  # pass stock data unchanged to avoid fault (drive 553).
+  if virt_dist is not None and stock_dist >= 200 and virt_dist < stock_dist:
     values["ACC_Distance"] = virt_dist
     values["ACC_LeadConf"] = virt_b1 if virt_b1 is not None else 0xeb
     # TEST4: escalate to 0xBC when dist ≤ 12m — ECM only authorizes hydraulic braking
