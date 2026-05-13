@@ -137,7 +137,9 @@ def create_radar(packer, stock_fsm1, long_active, virt_dist=None, virt_b1=None):
   if virt_dist is not None and stock_tgt == 0x00 and virt_dist < int(stock_fsm1["ACC_Distance"]):
     values["ACC_Distance"] = virt_dist
     values["ACC_LeadConf"] = virt_b1 if virt_b1 is not None else 0xeb
-    values["ACC_TargetState"] = 0xb8
+    # TEST4: escalate to 0xBC when dist ≤ 12m — ECM only authorizes hydraulic braking
+    # with "confirmed close" state; 0xB8 (tracked) is not enough for braking authority.
+    values["ACC_TargetState"] = 0xbc if virt_dist <= 12 else 0xb8
     values["Byte_4"] = 0x49
     values["Byte_6"] = 0x74
   return packer.make_can_msg("FSM1", 0, values)
