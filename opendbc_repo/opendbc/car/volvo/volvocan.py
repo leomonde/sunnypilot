@@ -128,17 +128,16 @@ def create_radar(packer, stock_fsm1, long_active, virt_dist=None, virt_b1=None):
     "Byte_6",
     "Byte_7",
   )}
-  if virt_dist is not None and virt_dist < int(stock_fsm1["ACC_Distance"]):
+  stock_tgt = int(stock_fsm1["ACC_TargetState"])
+  # TEST3: only inject virtual lead when stock has NO real lead (tgt=0x00).
+  # Log analysis (drive 553 vs 556): when stock already tracks a lead (0xB8/0xBC/0x04),
+  # OP injecting B8 at a different distance breaks kinematic consistency and triggers
+  # ECM fault. When stock has a real lead, ECM already has hydraulic-brake authority —
+  # no injection needed. Virtual lead only needed when stock sees no target at all.
+  if virt_dist is not None and stock_tgt == 0x00 and virt_dist < int(stock_fsm1["ACC_Distance"]):
     values["ACC_Distance"] = virt_dist
     values["ACC_LeadConf"] = virt_b1 if virt_b1 is not None else 0xeb
-    # Stock FSM1: tgt=0xB8 during approach, tgt=0xBC only when close (dist≤12m).
-    # Log analysis (drive 53d segs 19-21): stock sends BC at dist=4-106m, but only after
-    # a gradual tracked approach — never at large distances like 200-250m.
-    # Sending BC at 250m (as the old drift-in code did) triggers an ECM fault because
-    # BC at that range is physically impossible/inconsistent. Match stock: B8 during
-    # approach, BC only once the virtual lead is genuinely close.
-    # B4/B6 companion bytes are present in every stock valid-lead frame.
-    values["ACC_TargetState"] = 0xb8  # TEST1: B8 always, no BC yet
+    values["ACC_TargetState"] = 0xb8
     values["Byte_4"] = 0x49
     values["Byte_6"] = 0x74
   return packer.make_can_msg("FSM1", 0, values)

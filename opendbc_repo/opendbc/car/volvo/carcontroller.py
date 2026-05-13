@@ -176,12 +176,10 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         if self.sng_ack_frames > 0:
           self.sng_ack_frames -= 1
 
-        # TEST2: kinematic virtual lead — FSM1 dist moves consistently with FSM4 lead speed.
-        # Phase 1 (virt_dist > target): drift toward target at 10m/frame (fast initial approach).
-        # Phase 2 (virt_dist <= target): decrease at closing_rate = vEgo - virt_lead_ms,
-        # same formula as FSM4, so FSM1 dist and FSM4 lead_speed are always consistent.
-        # Root cause of TEST1 fault: dist stuck at 20m while ECM expected it to decrease
-        # at 2.2 m/s closing rate → kinematic inconsistency after ~3s.
+        # TEST3: kinematic virtual lead — only injected when stock FSM1 has no real lead (tgt=0x00).
+        # When stock already has a lead (0xB8/0xBC/0x04), ECM already has hydraulic-brake authority;
+        # injecting B8 at a different distance breaks kinematic consistency and triggers fault (drive 553).
+        # Kinematic movement: Phase 1 drift to target, Phase 2 decrease at closing_rate = vEgo - virt_lead_ms.
         if accel < -0.05:
           frac = min(1.0, (abs(accel) - 0.05) / 0.75)
           target_dist = 60.0 - frac * 40.0  # 20m floor at max decel
