@@ -180,25 +180,22 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         # When stock already has a lead (0xB8/0xBC/0x04), ECM already has hydraulic-brake authority;
         # injecting B8 at a different distance breaks kinematic consistency and triggers fault (drive 553).
         # Kinematic movement: Phase 1 drift to target, Phase 2 decrease at closing_rate = vEgo - virt_lead_ms.
-        cruise_dist = max(8.0, CS.out.vEgo * 2.0)  # 2-second following distance (log 55a: stock ~1.87s mean)
+        set_speed_ms = max(1.0, CS.out.cruiseState.speed)  # ACC set speed in m/s
         if accel < -0.05:
-          frac = min(1.0, (abs(accel) - 0.05) / 0.75)
-          # cap upper bound at cruise_dist so braking never moves lead further away
-          max_target = min(cruise_dist, 60.0)
-          target_dist = max_target - frac * (max_target - 20.0)  # 20m floor at max decel
-          if self.virt_dist > target_dist:
-            self.virt_dist += max(-10.0, min(10.0, target_dist - self.virt_dist))
+          # Phase 1: drift toward 30m cruise distance (fixed, not speed-dependent)
+          if self.virt_dist > 30.0:
+            self.virt_dist = max(30.0, self.virt_dist - 10.0)
           else:
-            virt_lead_ms = max(0.0, CS.out.vEgo + accel * CarControllerParams.FSM4_LEAD_LOOKAHEAD_S)
-            closing_rate = CS.out.vEgo - virt_lead_ms
+            # Phase 2: kinematic decrease — virtual lead travels at set_speed, car closing at vEgo-set_speed
+            closing_rate = max(0.0, CS.out.vEgo - set_speed_ms)
             self.virt_dist -= closing_rate * (self.LONG_TX_PERIOD_NANOS / 1e9)
             self.virt_dist = max(8.0, self.virt_dist)
         else:
-          # drift toward 2-second following distance at ≤10m/frame
-          if self.virt_dist > cruise_dist:
-            self.virt_dist = max(cruise_dist, self.virt_dist - 10.0)
+          # cruise: drift back to 30m at ≤10m/frame
+          if self.virt_dist > 30.0:
+            self.virt_dist = max(30.0, self.virt_dist - 10.0)
           else:
-            self.virt_dist = min(cruise_dist, self.virt_dist + 10.0)
+            self.virt_dist = min(30.0, self.virt_dist + 10.0)
         virt_dist_int = int(round(self.virt_dist))
         can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, True,
                                                virt_dist=virt_dist_int, virt_b1=0xFF))
@@ -230,13 +227,13 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       self.next_fsm4_tx_nanos = next_fsm4
 
       # FSM4 virtual lead speed — active when longActive AND no real lead (stock_dist>=200).
-      # When real lead present, pass stock FSM4 through so ECM sees the real lead speed.
-      # When no real lead: vEgo + accel*lookahead → accel=0 → hold, accel<0 → decel, accel>0 → accel.
+      # Virtual lead travels at ACC set_speed: when car > set_speed, ECM sees closing lead and brakes;
+      # when car <= set_speed, lead is same speed or faster, ECM accelerates normally.
       no_real_lead = int(CS.stock_FSM1["ACC_Distance"]) >= 200
       if self.CP.openpilotLongitudinalControl and CC.longActive and no_real_lead:
-        virt_lead_ms = max(0.0, CS.out.vEgo + self.last_op_accel * CarControllerParams.FSM4_LEAD_LOOKAHEAD_S)
-        virt_lead_kmh = virt_lead_ms * CV.MS_TO_KPH
-        closing_ms = max(0.0, CS.out.vEgo - virt_lead_ms)
+        set_speed_ms = max(1.0, CS.out.cruiseState.speed)
+        virt_lead_kmh = set_speed_ms * CV.MS_TO_KPH
+        closing_ms = max(0.0, CS.out.vEgo - set_speed_ms)
         # Byte_2 = TTC×10: verified against seg20/drive53d log data.
         # Caps at 127 when closing≈0 (cruise, no approach) to stay below no-lead sentinel 0x82(130).
         virt_b2 = min(127, round(self.virt_dist / closing_ms * 10)) if closing_ms > 0.1 else 127
