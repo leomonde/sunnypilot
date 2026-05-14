@@ -180,7 +180,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         # When stock already has a lead (0xB8/0xBC/0x04), ECM already has hydraulic-brake authority;
         # injecting B8 at a different distance breaks kinematic consistency and triggers fault (drive 553).
         # Kinematic movement: Phase 1 drift to target, Phase 2 decrease at closing_rate = vEgo - virt_lead_ms.
-        set_speed_ms = max(1.0, CS.out.cruiseState.speed)  # ACC set speed in m/s
+        set_speed_ms = max(1.0, CS.out.vCruise * CV.KPH_TO_MS)  # OP target speed (SLA-adjusted)
         if accel < -0.05:
           # Phase 1: drift toward 30m cruise distance (fixed, not speed-dependent)
           if self.virt_dist > 30.0:
@@ -231,7 +231,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       # when car <= set_speed, lead is same speed or faster, ECM accelerates normally.
       no_real_lead = int(CS.stock_FSM1["ACC_Distance"]) >= 200
       if self.CP.openpilotLongitudinalControl and CC.longActive and no_real_lead:
-        set_speed_ms = max(1.0, CS.out.cruiseState.speed)
+        set_speed_ms = max(1.0, CS.out.vCruise * CV.KPH_TO_MS)  # OP target speed (SLA-adjusted)
         virt_lead_kmh = set_speed_ms * CV.MS_TO_KPH
         closing_ms = max(0.0, CS.out.vEgo - set_speed_ms)
         # Byte_2 = TTC×10: verified against seg20/drive53d log data.

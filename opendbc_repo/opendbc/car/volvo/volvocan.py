@@ -114,7 +114,7 @@ def create_fsm4(packer, stock_fsm4, lead_speed_kmh=None, virt_b2=None):
     values["ACC_LeadSpeed"] = max(0, int(round(lead_speed_kmh)))
   if virt_b2 is not None:
     values["Byte_2"] = int(virt_b2)
-    values["Byte_4"] = 0x8b
+    values["Byte_4"] = 0x8f  # stock always sends 0x8F even with real lead (drive 568 seg6)
     # B5 and B6 pass through from stock — log 55f confirmed stock always uses
     # B5=0xB3/B6=counter regardless of lead presence; injecting 0xF3/0x00 caused
     # ECM to disable ACC after ~1.5s (drive 55f seg4).
