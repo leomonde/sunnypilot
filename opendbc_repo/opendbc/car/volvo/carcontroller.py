@@ -180,9 +180,12 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         # When stock already has a lead (0xB8/0xBC/0x04), ECM already has hydraulic-brake authority;
         # injecting B8 at a different distance breaks kinematic consistency and triggers fault (drive 553).
         # Kinematic movement: Phase 1 drift to target, Phase 2 decrease at closing_rate = vEgo - virt_lead_ms.
+        cruise_dist = max(8.0, CS.out.vEgo * 2.0)  # 2-second following distance (log 55a: stock ~1.87s mean)
         if accel < -0.05:
           frac = min(1.0, (abs(accel) - 0.05) / 0.75)
-          target_dist = 60.0 - frac * 40.0  # 20m floor at max decel
+          # cap upper bound at cruise_dist so braking never moves lead further away
+          max_target = min(cruise_dist, 60.0)
+          target_dist = max_target - frac * (max_target - 20.0)  # 20m floor at max decel
           if self.virt_dist > target_dist:
             self.virt_dist += max(-10.0, min(10.0, target_dist - self.virt_dist))
           else:
@@ -191,9 +194,11 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
             self.virt_dist -= closing_rate * (self.LONG_TX_PERIOD_NANOS / 1e9)
             self.virt_dist = max(8.0, self.virt_dist)
         else:
-          # TEST8: drift toward 40m cruise distance — ECM engages lead-following mode sooner
-          # than 100m; verified that 100m with 2 km/h closing kept ECM in Cruise Mode (drive 55e).
-          self.virt_dist = min(40.0, self.virt_dist + 10.0)
+          # drift toward 2-second following distance at ≤10m/frame
+          if self.virt_dist > cruise_dist:
+            self.virt_dist = max(cruise_dist, self.virt_dist - 10.0)
+          else:
+            self.virt_dist = min(cruise_dist, self.virt_dist + 10.0)
         virt_dist_int = int(round(self.virt_dist))
         can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, True,
                                                virt_dist=virt_dist_int, virt_b1=0xFF))
@@ -244,7 +249,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     # Byte_0 (rolling counter) and Byte_7 (checksum) are passed from stock unchanged —
     # log analysis confirmed byte7 does not cover byte2, so ACC_FrontCar override is checksum-safe.
     virt_lead_active = (self.CP.openpilotLongitudinalControl and CC.longActive
-                        and int(round(self.virt_dist)) <= 40)
+                        and int(round(self.virt_dist)) < 200)
     can_sends.append(volvocan.create_fsm0(self.packer_pt, CS.stock_FSM0,
                                           front_car_override=1 if virt_lead_active else None))
 
