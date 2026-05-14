@@ -115,8 +115,9 @@ def create_fsm4(packer, stock_fsm4, lead_speed_kmh=None, virt_b2=None):
   if virt_b2 is not None:
     values["Byte_2"] = int(virt_b2)
     values["Byte_4"] = 0x8b
-    values["Byte_5"] = 0xf3  # moving lead range (~62208 combined with B6=0x00)
-    values["Byte_6"] = 0x00
+    # B5 and B6 pass through from stock — log 55f confirmed stock always uses
+    # B5=0xB3/B6=counter regardless of lead presence; injecting 0xF3/0x00 caused
+    # ECM to disable ACC after ~1.5s (drive 55f seg4).
   return packer.make_can_msg("FSM4", 0, values)
 
 
