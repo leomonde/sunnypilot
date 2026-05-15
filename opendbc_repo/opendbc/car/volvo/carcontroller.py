@@ -180,14 +180,16 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         # When stock already has a lead (0xB8/0xBC/0x04), ECM already has hydraulic-brake authority;
         # injecting B8 at a different distance breaks kinematic consistency and triggers fault (drive 553).
         # Kinematic movement: Phase 1 drift to target, Phase 2 decrease at closing_rate = vEgo - virt_lead_ms.
-        set_speed_ms = max(1.0, CS.out.vCruise * CV.KPH_TO_MS)  # OP target speed (SLA-adjusted)
+        # virt_lead_ms = where the car should be in 2s at current accel — makes virtual lead slower than
+        # car when decelerating, so ECM sees a closing lead and grants hydraulic-brake authority.
+        virt_lead_ms = max(0.5, CS.out.vEgo + accel * 2.0)
         if accel < -0.05:
           # Phase 1: drift toward 30m cruise distance (fixed, not speed-dependent)
           if self.virt_dist > 30.0:
             self.virt_dist = max(30.0, self.virt_dist - 10.0)
           else:
-            # Phase 2: kinematic decrease — virtual lead travels at set_speed, car closing at vEgo-set_speed
-            closing_rate = max(0.0, CS.out.vEgo - set_speed_ms)
+            # Phase 2: kinematic decrease — virtual lead travels at virt_lead_ms, car closing
+            closing_rate = max(0.0, CS.out.vEgo - virt_lead_ms)
             self.virt_dist -= closing_rate * (self.LONG_TX_PERIOD_NANOS / 1e9)
             self.virt_dist = max(8.0, self.virt_dist)
         else:
@@ -223,14 +225,14 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         next_fsm4 = now_nanos + self.FSM4_TX_PERIOD_NANOS
       self.next_fsm4_tx_nanos = next_fsm4
 
-      # FSM4 virtual lead speed — active when longActive AND no real lead (stock_dist>=200).
-      # Virtual lead travels at ACC set_speed: when car > set_speed, ECM sees closing lead and brakes;
-      # when car <= set_speed, lead is same speed or faster, ECM accelerates normally.
+      # FSM4 virtual lead speed — active when longActive AND no real lead (stock_dist>=200) AND virt lead active.
+      # Virtual lead travels at virt_lead_ms (vEgo + accel*2s lookahead): slower than car when decelerating,
+      # so ECM sees a closing lead and applies hydraulic braking to match OP's accel request.
       no_real_lead = int(CS.stock_FSM1["ACC_Distance"]) >= 200
       if self.CP.openpilotLongitudinalControl and CC.longActive and no_real_lead and int(round(self.virt_dist)) < 200:
-        set_speed_ms = max(1.0, CS.out.vCruise * CV.KPH_TO_MS)  # OP target speed (SLA-adjusted)
-        virt_lead_kmh = set_speed_ms * CV.MS_TO_KPH
-        closing_ms = max(0.0, CS.out.vEgo - set_speed_ms)
+        virt_lead_ms = max(0.5, CS.out.vEgo + self.last_op_accel * 2.0)
+        virt_lead_kmh = virt_lead_ms * CV.MS_TO_KPH
+        closing_ms = max(0.0, CS.out.vEgo - virt_lead_ms)
         # Byte_2 = TTC×10: verified against seg20/drive53d log data.
         # Caps at 127 when closing≈0 (cruise, no approach) to stay below no-lead sentinel 0x82(130).
         virt_b2 = min(127, round(self.virt_dist / closing_ms * 10)) if closing_ms > 0.1 else 127
