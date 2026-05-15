@@ -179,14 +179,15 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         # TEST5: kinematic virtual lead — only injected when stock FSM1 has no real lead (dist>=200).
         # When stock already has a lead (0xB8/0xBC/0x04), ECM already has hydraulic-brake authority;
         # injecting B8 at a different distance breaks kinematic consistency and triggers fault (drive 553).
-        # virt_lead_ms = where the car should be in 2s at current accel — slower than car when
-        # decelerating, so ECM sees a closing lead and grants hydraulic-brake authority.
-        # Distance is always derived purely from closing rate so FSM1 and FSM4 stay consistent.
-        virt_lead_ms = max(0.5, CS.out.vEgo + accel * 2.0)
+        # virt_lead_ms: 5s kinematic lookahead — creates meaningful speed difference even for
+        # small accel values so ECM sees a closing lead and applies hydraulic braking.
+        # Distance is always derived from closing rate so FSM1 and FSM4 stay consistent.
+        virt_lead_ms = max(0.5, CS.out.vEgo + accel * 5.0)
         if accel < -0.05:
-          # on first entry (transition from no-lead), snap to speed-proportional initial distance
+          # on first entry, snap to 1.5s following distance — already inside ECM comfort zone
+          # so ECM brakes immediately rather than approaching the lead.
           if self.virt_dist > 200:
-            self.virt_dist = CS.out.vEgo * 4.0
+            self.virt_dist = CS.out.vEgo * 1.5
           # kinematic decrease — d(dist)/dt = -(vEgo - virt_lead_ms), consistent with FSM4 speed
           closing_rate = max(0.0, CS.out.vEgo - virt_lead_ms)
           self.virt_dist -= closing_rate * (self.LONG_TX_PERIOD_NANOS / 1e9)
@@ -206,9 +207,14 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           self.sng_ack_frames -= 1
         else:
           acc_check = int(CS.stock_FSM3["ACC_Check"])
-        # drift virt_dist back to 255 so the next longActive period starts neutral
+        # fade virt_dist back to 255 gradually — instant jump to stock dist=255 causes ECM fault
         self.virt_dist = min(255.0, self.virt_dist + 10.0)
-        can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, CC.longActive))
+        virt_dist_exit = int(round(self.virt_dist))
+        if virt_dist_exit < 200:
+          can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, False,
+                                                 virt_dist=virt_dist_exit))
+        else:
+          can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, False))
 
       # store accel for use by 33Hz FSM4 block below
       self.last_op_accel = accel
@@ -229,7 +235,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       # so ECM sees a closing lead and applies hydraulic braking to match OP's accel request.
       no_real_lead = int(CS.stock_FSM1["ACC_Distance"]) >= 200
       if self.CP.openpilotLongitudinalControl and CC.longActive and no_real_lead and int(round(self.virt_dist)) < 200:
-        virt_lead_ms = max(0.5, CS.out.vEgo + self.last_op_accel * 2.0)
+        virt_lead_ms = max(0.5, CS.out.vEgo + self.last_op_accel * 5.0)
         virt_lead_kmh = virt_lead_ms * CV.MS_TO_KPH
         closing_ms = max(0.0, CS.out.vEgo - virt_lead_ms)
         # Byte_2 = TTC×10: verified against seg20/drive53d log data.
