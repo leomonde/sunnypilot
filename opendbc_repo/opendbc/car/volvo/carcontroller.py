@@ -179,19 +179,18 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         # TEST5: kinematic virtual lead — only injected when stock FSM1 has no real lead (dist>=200).
         # When stock already has a lead (0xB8/0xBC/0x04), ECM already has hydraulic-brake authority;
         # injecting B8 at a different distance breaks kinematic consistency and triggers fault (drive 553).
-        # Kinematic movement: Phase 1 drift to target, Phase 2 decrease at closing_rate = vEgo - virt_lead_ms.
-        # virt_lead_ms = where the car should be in 2s at current accel — makes virtual lead slower than
-        # car when decelerating, so ECM sees a closing lead and grants hydraulic-brake authority.
+        # virt_lead_ms = where the car should be in 2s at current accel — slower than car when
+        # decelerating, so ECM sees a closing lead and grants hydraulic-brake authority.
+        # Distance is always derived purely from closing rate so FSM1 and FSM4 stay consistent.
         virt_lead_ms = max(0.5, CS.out.vEgo + accel * 2.0)
         if accel < -0.05:
-          # Phase 1: drift toward 30m cruise distance (fixed, not speed-dependent)
-          if self.virt_dist > 30.0:
-            self.virt_dist = max(30.0, self.virt_dist - 10.0)
-          else:
-            # Phase 2: kinematic decrease — virtual lead travels at virt_lead_ms, car closing
-            closing_rate = max(0.0, CS.out.vEgo - virt_lead_ms)
-            self.virt_dist -= closing_rate * (self.LONG_TX_PERIOD_NANOS / 1e9)
-            self.virt_dist = max(8.0, self.virt_dist)
+          # on first entry (transition from no-lead), snap to speed-proportional initial distance
+          if self.virt_dist > 200:
+            self.virt_dist = CS.out.vEgo * 4.0
+          # kinematic decrease — d(dist)/dt = -(vEgo - virt_lead_ms), consistent with FSM4 speed
+          closing_rate = max(0.0, CS.out.vEgo - virt_lead_ms)
+          self.virt_dist -= closing_rate * (self.LONG_TX_PERIOD_NANOS / 1e9)
+          self.virt_dist = max(8.0, self.virt_dist)
         else:
           # no decel needed: drift back to 255 so ECM accelerates freely
           self.virt_dist = min(255.0, self.virt_dist + 10.0)
