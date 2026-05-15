@@ -191,11 +191,8 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
             self.virt_dist -= closing_rate * (self.LONG_TX_PERIOD_NANOS / 1e9)
             self.virt_dist = max(8.0, self.virt_dist)
         else:
-          # cruise: drift back to 30m at ≤10m/frame
-          if self.virt_dist > 30.0:
-            self.virt_dist = max(30.0, self.virt_dist - 10.0)
-          else:
-            self.virt_dist = min(30.0, self.virt_dist + 10.0)
+          # no decel needed: drift back to 255 so ECM accelerates freely
+          self.virt_dist = min(255.0, self.virt_dist + 10.0)
         virt_dist_int = int(round(self.virt_dist))
         can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, True,
                                                virt_dist=virt_dist_int, virt_b1=0xFF))
@@ -230,7 +227,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       # Virtual lead travels at ACC set_speed: when car > set_speed, ECM sees closing lead and brakes;
       # when car <= set_speed, lead is same speed or faster, ECM accelerates normally.
       no_real_lead = int(CS.stock_FSM1["ACC_Distance"]) >= 200
-      if self.CP.openpilotLongitudinalControl and CC.longActive and no_real_lead:
+      if self.CP.openpilotLongitudinalControl and CC.longActive and no_real_lead and int(round(self.virt_dist)) < 200:
         set_speed_ms = max(1.0, CS.out.vCruise * CV.KPH_TO_MS)  # OP target speed (SLA-adjusted)
         virt_lead_kmh = set_speed_ms * CV.MS_TO_KPH
         closing_ms = max(0.0, CS.out.vEgo - set_speed_ms)
