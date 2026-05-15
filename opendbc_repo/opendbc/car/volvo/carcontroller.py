@@ -207,14 +207,9 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           self.sng_ack_frames -= 1
         else:
           acc_check = int(CS.stock_FSM3["ACC_Check"])
-        # fade virt_dist back to 255 gradually — instant jump to stock dist=255 causes ECM fault
+        # drift virt_dist back to 255 so the next longActive period starts neutral
         self.virt_dist = min(255.0, self.virt_dist + 10.0)
-        virt_dist_exit = int(round(self.virt_dist))
-        if virt_dist_exit < 200:
-          can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, False,
-                                                 virt_dist=virt_dist_exit))
-        else:
-          can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, False))
+        can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, False))
 
       # store accel for use by 33Hz FSM4 block below
       self.last_op_accel = accel
