@@ -1,12 +1,17 @@
-def create_button_msg(packer, resume=False, cancel=False, bus=0):
+def create_button_msg(packer, resume=False, cancel=False, set_plus=False, minus=False, bus=0):
   # TODO: validate
   msg = {
     "ACCOnOffBtn": cancel,
     "ACCOnOffBtnInv": not cancel,
     "ACCResumeBtn": resume,
     "ACCResumeBtnInv": not resume,
+    "ACCSetBtn": set_plus,
+    "ACCSetBtnInv": not set_plus,
+    "ACCMinusBtn": minus,
+    "ACCMinusBtnInv": not minus,
   }
   return packer.make_can_msg("CCButtons", bus, msg)
+
 
 
 def create_lkas_state_msg(packer, steering_angle: float, stock_values: dict):
@@ -49,3 +54,39 @@ def create_lka_msg(packer, apply_steer: float, steer_direction: int):
   values["Checksum"] = calculate_lka_checksum(dat)
 
   return packer.make_can_msg("FSM2", 0, values)
+
+
+def create_longitudinal(packer, stock_fsm3, accel, acc_check):
+  # pass stock FSM3 verbatim except ACC_AccelerationRequest and ACC_Check; bit flip faults ECU (drive 27)
+  values = {s: stock_fsm3[s] for s in (
+    "ACC_Standstill",
+    "Byte_01",
+    "Byte_02",
+    "Byte_2",
+    "Byte_3",
+    "Byte_4",
+    "Byte_5",
+    "Byte_6",
+    "Byte_7",
+  )}
+  values |= {
+    "ACC_AccelerationRequest": accel,
+    "ACC_Check": acc_check,
+  }
+  return packer.make_can_msg("FSM3", 0, values)
+
+
+def create_radar(packer, stock_fsm1, long_active):
+  # pass stock FSM1 verbatim; spoofing ACC_Distance=255 caused stock ACC to disengage below 30 km/h
+  _ = long_active  # kept for signature stability
+  values = {s: stock_fsm1[s] for s in (
+    "ACC_Distance",
+    "Byte_1",
+    "Byte_2",
+    "Byte_3",
+    "Byte_4",
+    "Byte_5",
+    "Byte_6",
+    "Byte_7",
+  )}
+  return packer.make_can_msg("FSM1", 0, values)

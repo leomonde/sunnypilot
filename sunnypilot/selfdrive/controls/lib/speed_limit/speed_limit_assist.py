@@ -316,7 +316,12 @@ class SpeedLimitAssist:
         # ACTIVE
         if self.state == SpeedLimitAssistState.active:
           if self.v_cruise_cluster_changed:
-            self.state = SpeedLimitAssistState.inactive
+            cluster_fell = self.v_cruise_cluster_conv < self.prev_v_cruise_cluster_conv
+            cluster_rose = self.v_cruise_cluster_conv > self.prev_v_cruise_cluster_conv
+            toward_target = (cluster_fell and self.v_cruise_cluster_conv >= self.speed_limit_final_last_conv) or \
+                            (cluster_rose and self.v_cruise_cluster_conv <= self.speed_limit_final_last_conv)
+            if not toward_target:
+              self.state = SpeedLimitAssistState.inactive
 
           elif self.speed_limit_changed and self.apply_confirm_speed_threshold:
             self.state = SpeedLimitAssistState.preActive
