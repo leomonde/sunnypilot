@@ -121,30 +121,9 @@ static bool volvo_tx_hook(const CANPacket_t *msg) {
 }
 
 static bool volvo_fwd_hook(int bus_num, int addr) {
-  // Dynamically block stock FSM1/FSM3 cam->main forwarding only when OP is
-  // actively controlling long AND the driver isn't overriding with gas.
-  //
-  // Why !gas_pressed: drive 3a showed every sustained gas press (>1s) caused
-  // stock ACC to cancel when the block was gated on controls_allowed alone.
-  // During a gas override OP's longActive goes False, our carcontroller
-  // stops TXing (gated on longActive below); meanwhile we were still
-  // blocking stock's fresh FSM3 from reaching the ECM. Net: FSM3 silent on
-  // main bus for the duration of the gas press. Stock ACC detects its own
-  // commands aren't being reflected and bails.
-  //
-  // Drive 23 confirmed this is OUR bug, not Volvo's native behavior — in
-  // pre-OP-long drives, sustained gas presses (up to 7s) never cancelled
-  // stock CC. Volvo ACC does NOT natively disengage on sustained gas.
-  //
-  // Fix: during gas press, unblock stock cam->main so real stock FSM3
-  // reaches the ECM at 50Hz with correct timing. OP also stops TXing
-  // (longActive=False). Car behaves identically to stock during the
-  // override. When gas released, block and OP TX resume together.
-  if (bus_num == VOLVO_CAM_BUS && controls_allowed && !gas_pressed) {
-    if (addr == VOLVO_EUCD_FSM1 || addr == VOLVO_EUCD_FSM3) {
-      return true;
-    }
-  }
+  // OP long is disabled: stock FSM1/FSM3 always flow cam->main unblocked.
+  (void)bus_num;
+  (void)addr;
   return false;
 }
 

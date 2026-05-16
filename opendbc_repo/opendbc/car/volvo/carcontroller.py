@@ -30,12 +30,6 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.distance = 0
     self.waiting = False
     self.sng_count = 0
-    # wall-clock gate for FSM3/FSM1 TX — controlsd jitter makes frame%2 unreliable (drive 41)
-    self.next_long_tx_nanos = 0
-    self.LONG_TX_PERIOD_NANOS = 20_000_000  # 50Hz, matching stock
-
-    # remaining FSM3 TXs with ACC_Check=1; must be forced during resume blast (not copied from stock)
-    self.sng_ack_frames = 0
 
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
@@ -106,32 +100,11 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       if at_standstill and self.waiting and lead_moved:
         # send 25 messages at a time to increases the likelihood of resume being accepted
         can_sends.extend([volvocan.create_button_msg(self.packer_pt, resume=True)] * 25)
-        if self.sng_count == 0:
-          self.sng_ack_frames = 25
         self.sng_count += 1
       # disable sending resume after 5 cycles sent or if no more in standstill
       if self.waiting and (self.sng_count >= 5 or not CS.out.cruiseState.standstill):
         self.waiting = False
         self.last_resume_frame = self.frame
-
-    # FSM3/FSM1 at 50Hz: relay stock cam values. Panda's fwd_hook blocks
-    # FSM1/FSM3 cam→main when controls_allowed, so we must send them here.
-    long_tx_due = now_nanos >= self.next_long_tx_nanos
-    if long_tx_due:
-      next_tx = self.next_long_tx_nanos + self.LONG_TX_PERIOD_NANOS
-      if self.next_long_tx_nanos == 0 or next_tx <= now_nanos:
-        next_tx = now_nanos + self.LONG_TX_PERIOD_NANOS
-      self.next_long_tx_nanos = next_tx
-
-      accel = float(CS.stock_FSM3["ACC_AccelerationRequest"])
-      if self.sng_ack_frames > 0:
-        acc_check = 1
-        self.sng_ack_frames -= 1
-      else:
-        acc_check = int(CS.stock_FSM3["ACC_Check"])
-
-      can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, accel, acc_check))
-      can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, False))
 
     # Intelligent Cruise Button Management
     can_sends.extend(IntelligentCruiseButtonManagementInterface.update(self, CC_SP, CS, self.packer_pt, self.frame, self.last_button_frame))
