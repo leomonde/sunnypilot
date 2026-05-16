@@ -36,12 +36,7 @@ class CarInterface(CarInterfaceBase):
     ret.steerActuatorDelay = 0.2
     ret.steerLimitTimer = 0.8
 
-    # Longitudinal — toggle in Developer settings enables OP long; when off, ICBM is available
-    ret.alphaLongitudinalAvailable = True
-    ret.openpilotLongitudinalControl = alpha_long
-    ret.longitudinalActuatorDelay = 0.35
-    ret.vEgoStopping = 0.25
-    ret.stopAccel = 0
+    ret.openpilotLongitudinalControl = False
 
     return ret
 

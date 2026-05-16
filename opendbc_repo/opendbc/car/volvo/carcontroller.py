@@ -1,4 +1,3 @@
-import numpy as np
 from opendbc.can import CANPacker
 from openpilot.common.realtime import DT_CTRL
 from opendbc.car import Bus, structs
@@ -31,9 +30,6 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.distance = 0
     self.waiting = False
     self.sng_count = 0
-    # frame when last SNG resume blast started; used for take-off passthrough window
-    self.takeoff_start_frame = -1_000_000
-
     # wall-clock gate for FSM3/FSM1 TX — controlsd jitter makes frame%2 unreliable (drive 41)
     self.next_long_tx_nanos = 0
     self.LONG_TX_PERIOD_NANOS = 20_000_000  # 50Hz, matching stock
@@ -43,7 +39,6 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
 
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
-    accel = 0.0  # always defined so SNG block never NameErrors
 
     actuators = CC.actuators
     pcm_cancel_cmd = CC.cruiseControl.cancel
@@ -99,7 +94,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     at_standstill = (CS.out.cruiseState.enabled and CS.out.cruiseState.standstill
                      and CS.out.vEgo < 0.01)
 
-    # SNG — evaluated before long-control TX so takeoff flag is visible below
+    # SNG
     if (self.frame - self.last_resume_frame) * DT_CTRL > 1.00:
       if at_standstill and not self.waiting:
         self.distance = CS.acc_distance
@@ -107,13 +102,11 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         self.sng_count = 0
 
       lead_moved = CS.acc_distance > self.distance
-      e2e_resume = CC.cruiseControl.resume
 
-      if at_standstill and self.waiting and (lead_moved or e2e_resume):
+      if at_standstill and self.waiting and lead_moved:
         # send 25 messages at a time to increases the likelihood of resume being accepted
         can_sends.extend([volvocan.create_button_msg(self.packer_pt, resume=True)] * 25)
         if self.sng_count == 0:
-          self.takeoff_start_frame = self.frame
           self.sng_ack_frames = 25
         self.sng_count += 1
       # disable sending resume after 5 cycles sent or if no more in standstill
@@ -121,7 +114,8 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         self.waiting = False
         self.last_resume_frame = self.frame
 
-    # FSM3/FSM1 at 50Hz wall-clock: OP accel when long active, stock passthrough otherwise (silence faults ECU)
+    # FSM3/FSM1 at 50Hz: relay stock cam values. Panda's fwd_hook blocks
+    # FSM1/FSM3 cam→main when controls_allowed, so we must send them here.
     long_tx_due = now_nanos >= self.next_long_tx_nanos
     if long_tx_due:
       next_tx = self.next_long_tx_nanos + self.LONG_TX_PERIOD_NANOS
@@ -129,31 +123,15 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         next_tx = now_nanos + self.LONG_TX_PERIOD_NANOS
       self.next_long_tx_nanos = next_tx
 
-      if self.CP.openpilotLongitudinalControl and CC.longActive:
-        op_accel = float(np.clip(actuators.accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
-
-        # take-off passthrough: use stock's accel when it's higher than OP's to match ECM expectations (drive 42)
-        takeoff_elapsed = (self.frame - self.takeoff_start_frame) * DT_CTRL
-        stock_accel = float(CS.stock_FSM3["ACC_AccelerationRequest"])
-        in_takeoff_window = takeoff_elapsed < 15.0 and CS.out.vEgo < 5.0  # 15s ceiling prevents runaway stock accel
-        if in_takeoff_window and stock_accel > op_accel and stock_accel > 0:
-          accel = stock_accel
-        else:
-          accel = op_accel
-
-        acc_check = 1 if self.sng_ack_frames > 0 else 0
-        if self.sng_ack_frames > 0:
-          self.sng_ack_frames -= 1
+      accel = float(CS.stock_FSM3["ACC_AccelerationRequest"])
+      if self.sng_ack_frames > 0:
+        acc_check = 1
+        self.sng_ack_frames -= 1
       else:
-        accel = float(CS.stock_FSM3["ACC_AccelerationRequest"])
-        if self.sng_ack_frames > 0:
-          acc_check = 1
-          self.sng_ack_frames -= 1
-        else:
-          acc_check = int(CS.stock_FSM3["ACC_Check"])
+        acc_check = int(CS.stock_FSM3["ACC_Check"])
 
       can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, accel, acc_check))
-      can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, CC.longActive))
+      can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, False))
 
     # Intelligent Cruise Button Management
     can_sends.extend(IntelligentCruiseButtonManagementInterface.update(self, CC_SP, CS, self.packer_pt, self.frame, self.last_button_frame))
