@@ -18,6 +18,13 @@ ACCELERATION_DUE_TO_GRAVITY = 9.81  # m/s^2
 ButtonType = structs.CarState.ButtonEvent.Type
 
 
+@dataclass
+class AngleSteeringLimits:
+  STEER_ANGLE_MAX: float
+  ANGLE_RATE_LIMIT_UP: tuple[list[float], list[float]]
+  ANGLE_RATE_LIMIT_DOWN: tuple[list[float], list[float]]
+
+
 def apply_hysteresis(val: float, val_steady: float, hyst_gap: float) -> float:
   if val > val_steady + hyst_gap:
     val_steady = val - hyst_gap
@@ -106,7 +113,7 @@ def make_tester_present_msg(addr, bus, subaddr=None, suppress_response=False):
   return CanData(addr, bytes(dat), bus)
 
 
-def get_safety_config(safety_model: structs.CarParams.SafetyModel, safety_param: int | None = None) -> structs.CarParams.SafetyConfig:
+def get_safety_config(safety_model: structs.CarParams.SafetyModel, safety_param: int = None) -> structs.CarParams.SafetyConfig:
   ret = structs.CarParams.SafetyConfig()
   ret.safetyModel = safety_model
   if safety_param is not None:
@@ -131,15 +138,17 @@ class CanSignalRateCalculator:
   Calculates the instantaneous rate of a CAN signal by using the counter
   variable and the known frequency of the CAN message that contains it.
   """
-  def __init__(self, frequency: int):
+  def __init__(self, frequency):
     self.frequency = frequency
+    self.previous_counter = 0
     self.previous_value = 0
     self.rate = 0
 
-  def update(self, current_value: float, updated: bool):
-    if updated:
+  def update(self, current_value, current_counter):
+    if current_counter != self.previous_counter:
       self.rate = (current_value - self.previous_value) * self.frequency
 
+    self.previous_counter = current_counter
     self.previous_value = current_value
 
     return self.rate
