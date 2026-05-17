@@ -121,9 +121,14 @@ static bool volvo_tx_hook(const CANPacket_t *msg) {
 }
 
 static bool volvo_fwd_hook(int bus_num, int addr) {
-  // OP long is disabled: stock FSM1/FSM3 always flow cam->main unblocked.
-  (void)bus_num;
-  (void)addr;
+  // Block stock FSM1/FSM3 from cam->main when OP is in control, so OP can
+  // relay them at 50Hz (passthrough) and override ACC_Check=1 during SNG
+  // without stock's ACC_Check=0 overwriting OP's value on the bus.
+  if (bus_num == VOLVO_CAM_BUS && controls_allowed && !gas_pressed) {
+    if (addr == VOLVO_EUCD_FSM1 || addr == VOLVO_EUCD_FSM3) {
+      return true;  // block forwarding; OP relays via create_radar/create_longitudinal
+    }
+  }
   return false;
 }
 

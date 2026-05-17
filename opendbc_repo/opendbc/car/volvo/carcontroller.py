@@ -34,6 +34,12 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     # OP's CCButtons resume unless FSM3 confirms it. Force 25 frames (~0.5s).
     self.sng_ack_frames = 0
 
+    # wall-clock gate for FSM3/FSM1 TX — frame%2 unreliable due to controlsd jitter
+    # complex fwd_hook blocks stock FSM3/FSM1 when controls_allowed && !gas_pressed,
+    # so OP must relay them at 50Hz to prevent ECU faults.
+    self.next_long_tx_nanos = 0
+    self.LONG_TX_PERIOD_NANOS = 20_000_000  # 50Hz, matching stock FSM3/FSM1
+
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
 
@@ -111,13 +117,25 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         self.waiting = False
         self.last_resume_frame = self.frame
 
-    # During SNG resume blast, override FSM3 ACC_Check=1 so ECU acknowledges
-    # the resume. Stock FSM3 (forwarded by panda) has ACC_Check=0; without
-    # this override the ECU ignores OP's CCButtons resume press.
-    if self.sng_ack_frames > 0 and self.frame % 2 == 0:
-      can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3,
-                                                    float(CS.stock_FSM3["ACC_AccelerationRequest"]), 1))
-      self.sng_ack_frames -= 1
+    # FSM3/FSM1 at 50Hz wall-clock: relay stock values so ECU doesn't fault.
+    # (complex fwd_hook blocks stock FSM3/FSM1 when controls_allowed && !gas_pressed)
+    # Override ACC_Check=1 during SNG resume blast so ECU acknowledges OP's CCButtons resume.
+    long_tx_due = now_nanos >= self.next_long_tx_nanos
+    if long_tx_due:
+      next_tx = self.next_long_tx_nanos + self.LONG_TX_PERIOD_NANOS
+      if self.next_long_tx_nanos == 0 or next_tx <= now_nanos:
+        next_tx = now_nanos + self.LONG_TX_PERIOD_NANOS
+      self.next_long_tx_nanos = next_tx
+
+      accel = float(CS.stock_FSM3["ACC_AccelerationRequest"])
+      if self.sng_ack_frames > 0:
+        acc_check = 1
+        self.sng_ack_frames -= 1
+      else:
+        acc_check = int(CS.stock_FSM3["ACC_Check"])
+
+      can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, False))
+      can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, accel, acc_check))
 
     # Intelligent Cruise Button Management
     can_sends.extend(IntelligentCruiseButtonManagementInterface.update(self, CC_SP, CS, self.packer_pt, self.frame, self.last_button_frame))
