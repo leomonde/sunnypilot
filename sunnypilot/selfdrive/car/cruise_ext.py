@@ -135,7 +135,8 @@ class VCruiseHelperSP:
     # pending_delta) incrementally push v_cruise_kph away from the limit each
     # time the car's ACC speed changes, causing a runaway feedback loop where
     # the planner target escalates past the speed limit on every ACC step.
-    if self.sla_state in SLA_ACTIVE_STATES:
+    if self.sla_state in SLA_ACTIVE_STATES and (self.prev_sla_state not in SLA_ACTIVE_STATES or
+                                                self.update_speed_limit_final_last_changed):
       self.v_cruise_kph = np.clip(round(self.speed_limit_final_last_kph, 1), self.v_cruise_min, V_CRUISE_MAX)
 
     self.prev_sla_state = self.sla_state

@@ -17,6 +17,7 @@ class CarState(CarStateBase):
     self.frame = 0
     self._cruise_speed_prev_kph = 0
     self._pending_delta = 0
+    self._icbm_suppress_frames = 0
 
   def update(self, can_parsers) -> structs.CarState:
     pt_cp = can_parsers[Bus.pt]
@@ -86,9 +87,14 @@ class CarState(CarStateBase):
     ret.rightBlinker = pt_cp.vl["MiscCarInfo"]["TurnSignal"] == 3
 
     # synthesize one accelCruise/decelCruise per frame from pending delta so the
-    # non-pcm cruise loop processes each km/h increment individually (breaks after first)
+    # non-pcm cruise loop processes each km/h increment individually (breaks after first).
+    # Suppressed for several frames after ICBM sends a button so that ACC speed changes
+    # caused by ICBM itself do not feed back into v_cruise_kph.
     cruise_kph_now = round(ret.cruiseState.speed * CV.MS_TO_KPH)
-    if ret.cruiseState.enabled and self.cruiseState_enabled_prev:
+    if self._icbm_suppress_frames > 0:
+      self._cruise_speed_prev_kph = cruise_kph_now
+      self._icbm_suppress_frames -= 1
+    elif ret.cruiseState.enabled and self.cruiseState_enabled_prev:
       self._pending_delta += cruise_kph_now - self._cruise_speed_prev_kph
     self._cruise_speed_prev_kph = cruise_kph_now
 
