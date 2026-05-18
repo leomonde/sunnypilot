@@ -141,7 +141,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     icbm_sends = IntelligentCruiseButtonManagementInterface.update(self, CC_SP, CS, self.packer_pt, self.frame, self.last_button_frame)
     if icbm_sends:
       CS._pending_delta = 0
-      CS._icbm_suppress_frames = 6
+      CS._icbm_suppress_frames = 25
     can_sends.extend(icbm_sends)
 
     new_actuators = actuators.as_builder()
