@@ -99,15 +99,18 @@ class CarState(CarStateBase):
       self._pending_delta += cruise_kph_now - self._cruise_speed_prev_kph
     self._cruise_speed_prev_kph = cruise_kph_now
 
-    # Emit one event per custom_acc_step km/h so cruise.py (which multiplies by
-    # custom_acc_step) produces exactly one hardware-step change per button press.
-    step = self._custom_acc_step
-    if self._pending_delta >= step:
+    # Emit one event per physical ACC step. The step consumed equals custom_acc_step
+    # so that cruise.py (which multiplies delta by custom_acc_step) produces exactly
+    # one increment per button press. Trigger on any non-zero delta (>= 1) to handle
+    # the sub-step snap case: e.g. Volvo snaps 41→45 (+4 km/h, not 5), which would
+    # never reach the step threshold of 5 and would silently drop the press.
+    step = max(1, self._custom_acc_step)
+    if self._pending_delta >= 1:
       ret.buttonEvents = [structs.CarState.ButtonEvent(pressed=False, type=ButtonType.accelCruise)]
-      self._pending_delta -= step
-    elif self._pending_delta <= -step:
+      self._pending_delta = max(0, self._pending_delta - step)
+    elif self._pending_delta <= -1:
       ret.buttonEvents = [structs.CarState.ButtonEvent(pressed=False, type=ButtonType.decelCruise)]
-      self._pending_delta += step
+      self._pending_delta = min(0, self._pending_delta + step)
 
     # lock info
     ret.doorOpen = not all([pt_cp.vl["Doors"]["DriverDoorClosed"], pt_cp.vl["Doors"]["PassengerDoorClosed"]])
