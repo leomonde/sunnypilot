@@ -1,4 +1,5 @@
 from opendbc.can import CANPacker
+from openpilot.common.params import Params
 from openpilot.common.realtime import DT_CTRL
 from opendbc.car import Bus, structs
 from opendbc.car.lateral import apply_std_steer_angle_limits
@@ -24,6 +25,11 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.steer_blocked = False
     self.steer_blocked_cnt = 0
     self.steer_dir_bf_block = SteerDirection.NONE
+
+    # Custom ACC increment: read once at init, refreshed every 100 frames.
+    # Passed to carstate so _pending_delta emits the right number of events.
+    self._params = Params()
+    self._custom_acc_step = max(1, int(self._params.get("CustomAccShortPressIncrement", return_default=True) or 1))
 
     # SNG
     self.last_resume_frame = 0
@@ -136,6 +142,12 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
 
       can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, False))
       can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, accel, acc_check))
+
+    # Refresh custom ACC step every 100 frames and forward to carstate so that
+    # _pending_delta emits exactly one synthetic event per physical ACC step.
+    if self.frame % 100 == 0:
+      self._custom_acc_step = max(1, int(self._params.get("CustomAccShortPressIncrement", return_default=True) or 1))
+    CS._custom_acc_step = self._custom_acc_step
 
     # Intelligent Cruise Button Management
     icbm_sends = IntelligentCruiseButtonManagementInterface.update(self, CC_SP, CS, self.packer_pt, self.frame, self.last_button_frame)
