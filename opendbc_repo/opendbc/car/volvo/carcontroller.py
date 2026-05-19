@@ -180,9 +180,13 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         # Persistent virtual lead — always active when longActive and no real lead.
         # Replicates stock FSM behavior: lead at 1.5s headway, speed = ego + accel*1.5s lookahead.
         # Lead is always present (never ON/OFF) so ECM never sees a lead appear/disappear.
+        # hard_brake: set FSM1.tgt=0xBC when braking hard (stock confirmed drive 589 seg22:
+        #   dist<20m + accel<-0.5 m/s²). Signals ECM that lead is braking → hydraulic brakes.
         virt_dist_m = max(10.0, CS.out.vEgo * 1.5)
+        hard_brake = accel < -0.5
         can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, True,
-                                               virt_dist=int(round(virt_dist_m)), virt_b1=0xFF))
+                                               virt_dist=int(round(virt_dist_m)), virt_b1=0xFF,
+                                               hard_brake=hard_brake))
       else:
         self.op_standstill_frames = 0
         acc_standstill = None  # pass stock ACC_Standstill through
@@ -211,6 +215,8 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       # FSM4 virtual lead — always active when longActive and no real lead.
       # Lead speed = ego + accel*1.5s lookahead (mirrors FSM1 logic above).
       # Byte_2: TTC×10 when closing (ego faster), else empirical from log analysis (ego_kmh×1.15≈70 at 60km/h).
+      # brake_b5: B5=0xF3 when hard braking (stock confirmed drive 589 seg22: accel<-0.5 m/s²).
+      #   B5=0xF2 for very hard braking (accel<-1.0). Required for ECM hydraulic brake activation.
       no_real_lead = int(CS.stock_FSM1["ACC_Distance"]) >= 200
       if self.CP.openpilotLongitudinalControl and CC.longActive and no_real_lead:
         virt_lead_ms = max(0.5, CS.out.vEgo + self.last_op_accel * 1.5)
@@ -221,7 +227,15 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           virt_b2 = min(127, int(virt_dist_m / closing_ms * 10))
         else:
           virt_b2 = min(127, int(virt_lead_kmh * 1.15))
-        can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4, virt_lead_kmh, virt_b2=virt_b2))
+        # brake_b5 mirrors stock FSM4.Byte_5 pattern: 0xF2=very hard, 0xF3=hard, None=normal
+        if self.last_op_accel < -1.0:
+          brake_b5 = 0xf2
+        elif self.last_op_accel < -0.5:
+          brake_b5 = 0xf3
+        else:
+          brake_b5 = None
+        can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4, virt_lead_kmh,
+                                              virt_b2=virt_b2, brake_b5=brake_b5))
       else:
         can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4))
 

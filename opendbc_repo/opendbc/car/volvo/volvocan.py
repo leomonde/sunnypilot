@@ -99,13 +99,18 @@ def create_longitudinal(packer, stock_fsm3, accel, acc_check, acc_standstill=Non
   return packer.make_can_msg("FSM3", 0, values)
 
 
-def create_fsm4(packer, stock_fsm4, lead_speed_kmh=None, virt_b2=None):
+def create_fsm4(packer, stock_fsm4, lead_speed_kmh=None, virt_b2=None, brake_b5=None):
   # Pass stock FSM4 through, optionally overriding signals for a virtual lead.
   # virt_b2: Byte_2 = TTC×10 (time-to-collision in seconds × 10), derived from
   # log analysis (seg20 drive 53d): B2 matches dist_m / closing_m_s × 10 exactly.
   # B2=0x82(130) is the no-lead sentinel; must be replaced when injecting virtual lead
   # or ECM detects FSM1↔FSM4 cross-message inconsistency and faults.
   # Byte_4=0x8B = lead present flag (0x8F = no lead).
+  # brake_b5: override Byte_5 to signal hydraulic-brake authority to ECM.
+  #   Log analysis (drive 589 seg22) confirmed stock sends B5=0xF3 during hard braking
+  #   (accel < -0.5 m/s²) and B5=0xF2 during very hard braking (accel < -1.0 m/s²).
+  #   B5=0xB4 during cruise/mild-following. Without B5=0xF3, ECM appears to allow only
+  #   engine-braking despite negative FSM3 accel request and virtual lead closure.
   values = {s: stock_fsm4[s] for s in (
     "Byte_0", "Byte_1", "Byte_2", "ACC_LeadSpeed",
     "Byte_4", "Byte_5", "Byte_6", "Byte_7",
@@ -115,17 +120,19 @@ def create_fsm4(packer, stock_fsm4, lead_speed_kmh=None, virt_b2=None):
   if virt_b2 is not None:
     values["Byte_2"] = int(virt_b2)
     values["Byte_4"] = 0x8b  # lead-present flag (0x8f=no lead; 0x8b=following, verified log 0000056d seg2)
-    # B5 and B6 pass through from stock — log 55f confirmed stock always uses
-    # B5=0xB3/B6=counter regardless of lead presence; injecting 0xF3/0x00 caused
-    # ECM to disable ACC after ~1.5s (drive 55f seg4).
+  if brake_b5 is not None:
+    values["Byte_5"] = int(brake_b5)
   return packer.make_can_msg("FSM4", 0, values)
 
 
-def create_radar(packer, stock_fsm1, long_active, virt_dist=None, virt_b1=None):
+def create_radar(packer, stock_fsm1, long_active, virt_dist=None, virt_b1=None, hard_brake=False):
   # Pass stock FSM1 through, optionally overriding ACC_Distance/ACC_LeadConf/ACC_TargetState
   # with a virtual lead to grant the ECU hydraulic-brake authority (drive 4d4).
   # Virtual values are only applied when they are closer than the stock distance,
   # so a real lead is never hidden from the ECU.
+  # hard_brake: set ACC_TargetState=0xBC (stock uses 0xBC for dist<20m AND accel<-0.5,
+  #   confirmed drive 589 seg22). Signals ECM that lead is braking hard → activates
+  #   hydraulic braking. 0xB8 is used for normal following.
   _ = long_active  # kept for signature stability
   values = {s: stock_fsm1[s] for s in (
     "ACC_Distance",
@@ -147,8 +154,9 @@ def create_radar(packer, stock_fsm1, long_active, virt_dist=None, virt_b1=None):
   if virt_dist is not None and stock_dist >= 200 and virt_dist < stock_dist:
     values["ACC_Distance"] = virt_dist
     values["ACC_LeadConf"] = virt_b1 if virt_b1 is not None else 0xeb
-    # Stock FSM uses 0xB8 for all following distances (7–149m confirmed in log analysis).
-    values["ACC_TargetState"] = 0xb8
+    # 0xBC = hard-braking lead state (stock confirmed drive 589 seg22: dist<20m + accel<-0.5).
+    # 0xB8 = normal following. Use 0xBC only when hard_brake to avoid spurious ECM faults.
+    values["ACC_TargetState"] = 0xbc if hard_brake else 0xb8
     values["Byte_4"] = 0x49
     values["Byte_6"] = 0x74
   return packer.make_can_msg("FSM1", 0, values)
