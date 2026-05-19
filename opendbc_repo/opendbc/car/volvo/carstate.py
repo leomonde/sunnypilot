@@ -17,6 +17,8 @@ class CarState(CarStateBase):
     self.frame = 0
     self._cruise_speed_prev_kph = 0
     self._pending_delta = 0
+    self._icbm_suppress_frames = 0
+    self._custom_acc_step = 1  # set by carcontroller each frame; default 1 km/h
 
   def update(self, can_parsers) -> structs.CarState:
     pt_cp = can_parsers[Bus.pt]
@@ -88,16 +90,22 @@ class CarState(CarStateBase):
     # synthesize one accelCruise/decelCruise per frame from pending delta so the
     # non-pcm cruise loop processes each km/h increment individually (breaks after first)
     cruise_kph_now = round(ret.cruiseState.speed * CV.MS_TO_KPH)
-    if ret.cruiseState.enabled and self.cruiseState_enabled_prev:
+    if self._icbm_suppress_frames > 0:
+      # ICBM just sent a button — absorb the resulting ACC speed change so it
+      # doesn't feed back into _pending_delta as a synthetic driver press.
+      self._cruise_speed_prev_kph = cruise_kph_now
+      self._icbm_suppress_frames -= 1
+    elif ret.cruiseState.enabled and self.cruiseState_enabled_prev:
       self._pending_delta += cruise_kph_now - self._cruise_speed_prev_kph
     self._cruise_speed_prev_kph = cruise_kph_now
 
-    if self._pending_delta > 0:
+    step = max(1, self._custom_acc_step)
+    if self._pending_delta >= 1:
       ret.buttonEvents = [structs.CarState.ButtonEvent(pressed=False, type=ButtonType.accelCruise)]
-      self._pending_delta -= 1
-    elif self._pending_delta < 0:
+      self._pending_delta = max(0, self._pending_delta - step)
+    elif self._pending_delta <= -1:
       ret.buttonEvents = [structs.CarState.ButtonEvent(pressed=False, type=ButtonType.decelCruise)]
-      self._pending_delta += 1
+      self._pending_delta = min(0, self._pending_delta + step)
 
     # lock info
     ret.doorOpen = not all([pt_cp.vl["Doors"]["DriverDoorClosed"], pt_cp.vl["Doors"]["PassengerDoorClosed"]])

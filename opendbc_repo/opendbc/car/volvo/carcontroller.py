@@ -1,5 +1,6 @@
 import numpy as np
 from opendbc.can import CANPacker
+from openpilot.common.params import Params
 from openpilot.common.realtime import DT_CTRL
 from opendbc.car import Bus, structs
 from opendbc.car.common.conversions import Conversions as CV
@@ -45,6 +46,10 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.last_op_accel = 0.0  # last computed accel, used by 33Hz FSM4 block
 
     self.sng_ack_frames = 0  # remaining FSM3 TXs with ACC_Check=1 during resume blast
+
+    # Custom ACC increment — read once at startup; refreshed periodically in update()
+    self._params = Params()
+    self._custom_acc_step = max(1, int(self._params.get("CustomAccShortPressIncrement", return_default=True) or 1))
 
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
@@ -229,8 +234,18 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     can_sends.append(volvocan.create_fsm0(self.packer_pt, CS.stock_FSM0,
                                           front_car_override=1 if virt_lead_active else None))
 
+    # Refresh custom ACC step from params every ~100 frames (~1 s) and forward to carstate
+    if self.frame % 100 == 0:
+      self._custom_acc_step = max(1, int(self._params.get("CustomAccShortPressIncrement", return_default=True) or 1))
+    CS._custom_acc_step = self._custom_acc_step
+
     # Intelligent Cruise Button Management
-    can_sends.extend(IntelligentCruiseButtonManagementInterface.update(self, CC_SP, CS, self.packer_pt, self.frame, self.last_button_frame))
+    icbm_sends = IntelligentCruiseButtonManagementInterface.update(self, CC_SP, CS, self.packer_pt, self.frame, self.last_button_frame)
+    if icbm_sends:
+      # Suppress synthetic _pending_delta events caused by ICBM's own ACC speed change
+      CS._pending_delta = 0
+      CS._icbm_suppress_frames = 25
+    can_sends.extend(icbm_sends)
 
     new_actuators = actuators.as_builder()
     new_actuators.steeringAngleDeg = self.apply_steer_prev
