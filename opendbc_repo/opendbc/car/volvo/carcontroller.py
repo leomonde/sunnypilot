@@ -35,10 +35,6 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.takeoff_start_frame = -1_000_000  # frame when last SNG resume blast started
     self.op_standstill_frames = 0  # consecutive long_tx ticks stopped with longActive
 
-    # virtual lead distance in FSM1; proportional to OP decel to grant ECU hydraulic-brake authority (drive 4d4)
-    # starts at 255 ("no lead"), drifts ≤10 units/frame toward target to avoid step changes
-    self.virt_dist = 255.0
-
     # wall-clock gate for FSM3/FSM1 TX — frame%2 unreliable due to controlsd jitter (drive 41)
     self.next_long_tx_nanos = 0
     self.LONG_TX_PERIOD_NANOS = 20_000_000  # 50Hz, matching stock FSM3/FSM1
@@ -176,29 +172,12 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         if self.sng_ack_frames > 0:
           self.sng_ack_frames -= 1
 
-        # TEST5: kinematic virtual lead — only injected when stock FSM1 has no real lead (dist>=200).
-        # When stock already has a lead (0xB8/0xBC/0x04), ECM already has hydraulic-brake authority;
-        # injecting B8 at a different distance breaks kinematic consistency and triggers fault (drive 553).
-        # virt_lead_ms: 10s kinematic lookahead, capped at 4.0 m/s closing rate (15 km/h).
-        # Cap prevents high-accel values from creating near-collision scenarios (dist<15m,
-        # TTC<2s) that put ECM in emergency mode — when virtual lead then disappears
-        # ECM faults (drive 570 seg4: accel=-1.3 → lead at 26 km/h, dist→12m → fault).
-        virt_lead_ms = max(0.5, CS.out.vEgo + accel * 10.0)
-        if accel < -0.05:
-          # on first entry, snap to 1.0s following distance — well inside ECM comfort zone
-          # so ECM brakes immediately rather than approaching the lead.
-          if self.virt_dist > 200:
-            self.virt_dist = CS.out.vEgo * 1.0
-          # kinematic decrease — capped at 4.0 m/s to stay in normal ACC range
-          closing_rate = min(4.0, max(0.0, CS.out.vEgo - virt_lead_ms))
-          self.virt_dist -= closing_rate * (self.LONG_TX_PERIOD_NANOS / 1e9)
-          self.virt_dist = max(15.0, self.virt_dist)
-        else:
-          # no decel needed: drift back to 255 so ECM accelerates freely
-          self.virt_dist = min(255.0, self.virt_dist + 10.0)
-        virt_dist_int = int(round(self.virt_dist))
+        # Persistent virtual lead — always active when longActive and no real lead.
+        # Replicates stock FSM behavior: lead at 1.5s headway, speed = ego + accel*1.5s lookahead.
+        # Lead is always present (never ON/OFF) so ECM never sees a lead appear/disappear.
+        virt_dist_m = max(10.0, CS.out.vEgo * 1.5)
         can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, True,
-                                               virt_dist=virt_dist_int, virt_b1=0xFF))
+                                               virt_dist=int(round(virt_dist_m)), virt_b1=0xFF))
       else:
         self.op_standstill_frames = 0
         acc_standstill = None  # pass stock ACC_Standstill through
@@ -208,8 +187,6 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           self.sng_ack_frames -= 1
         else:
           acc_check = int(CS.stock_FSM3["ACC_Check"])
-        # drift virt_dist back to 255 so the next longActive period starts neutral
-        self.virt_dist = min(255.0, self.virt_dist + 10.0)
         can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, False))
 
       # store accel for use by 33Hz FSM4 block below
@@ -226,17 +203,19 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         next_fsm4 = now_nanos + self.FSM4_TX_PERIOD_NANOS
       self.next_fsm4_tx_nanos = next_fsm4
 
-      # FSM4 virtual lead speed — active when longActive AND no real lead (stock_dist>=200) AND virt lead active.
-      # Virtual lead travels at virt_lead_ms (vEgo + accel*2s lookahead): slower than car when decelerating,
-      # so ECM sees a closing lead and applies hydraulic braking to match OP's accel request.
+      # FSM4 virtual lead — always active when longActive and no real lead.
+      # Lead speed = ego + accel*1.5s lookahead (mirrors FSM1 logic above).
+      # Byte_2: TTC×10 when closing (ego faster), else empirical from log analysis (ego_kmh×1.15≈70 at 60km/h).
       no_real_lead = int(CS.stock_FSM1["ACC_Distance"]) >= 200
-      if self.CP.openpilotLongitudinalControl and CC.longActive and no_real_lead and int(round(self.virt_dist)) < 200:
-        virt_lead_ms = max(0.5, CS.out.vEgo + self.last_op_accel * 10.0)
+      if self.CP.openpilotLongitudinalControl and CC.longActive and no_real_lead:
+        virt_lead_ms = max(0.5, CS.out.vEgo + self.last_op_accel * 1.5)
         virt_lead_kmh = virt_lead_ms * CV.MS_TO_KPH
-        closing_ms = min(4.0, max(0.0, CS.out.vEgo - virt_lead_ms))
-        # Byte_2 = TTC×10: verified against seg20/drive53d log data.
-        # Caps at 127 when closing≈0 (cruise, no approach) to stay below no-lead sentinel 0x82(130).
-        virt_b2 = min(127, round(self.virt_dist / closing_ms * 10)) if closing_ms > 0.1 else 127
+        virt_dist_m = max(10.0, CS.out.vEgo * 1.5)
+        closing_ms = max(0.0, CS.out.vEgo - virt_lead_ms)
+        if closing_ms > 0.1:
+          virt_b2 = min(127, int(virt_dist_m / closing_ms * 10))
+        else:
+          virt_b2 = min(127, int(virt_lead_kmh * 1.15))
         can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4, virt_lead_kmh, virt_b2=virt_b2))
       else:
         can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4))
@@ -246,7 +225,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     # Byte_0 (rolling counter) and Byte_7 (checksum) are passed from stock unchanged —
     # log analysis confirmed byte7 does not cover byte2, so ACC_FrontCar override is checksum-safe.
     virt_lead_active = (self.CP.openpilotLongitudinalControl and CC.longActive
-                        and int(round(self.virt_dist)) < 200)
+                        and int(CS.stock_FSM1["ACC_Distance"]) >= 200)
     can_sends.append(volvocan.create_fsm0(self.packer_pt, CS.stock_FSM0,
                                           front_car_override=1 if virt_lead_active else None))
 

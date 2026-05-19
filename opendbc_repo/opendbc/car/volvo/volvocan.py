@@ -147,9 +147,8 @@ def create_radar(packer, stock_fsm1, long_active, virt_dist=None, virt_b1=None):
   if virt_dist is not None and stock_dist >= 200 and virt_dist < stock_dist:
     values["ACC_Distance"] = virt_dist
     values["ACC_LeadConf"] = virt_b1 if virt_b1 is not None else 0xeb
-    # TEST8: escalate to 0xBC when dist ≤ 20m — Phase 1 ends at target_dist=20m (max decel),
-    # so BC is set immediately when Phase 2 begins; prevents ECM timeout fault (drive 55e).
-    values["ACC_TargetState"] = 0xbc if virt_dist <= 20 else 0xb8
+    # Stock FSM uses 0xB8 for all following distances (7–149m confirmed in log analysis).
+    values["ACC_TargetState"] = 0xb8
     values["Byte_4"] = 0x49
     values["Byte_6"] = 0x74
   return packer.make_can_msg("FSM1", 0, values)
