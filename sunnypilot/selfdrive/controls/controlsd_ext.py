@@ -69,12 +69,28 @@ class ControlsExt(ModelStateBase):
 
   @staticmethod
   def get_lead_data(ld: log.RadarState.LeadData) -> dict:
+    # Bug #5 guard: when status=False the capnp struct has all-zero defaults
+    # (dRel=0, vLead=0, aLeadTau=0, modelProb=0). Passing those to the car's
+    # ACC causes it to interpret dRel=0 as imminent collision → emergency brake.
+    # Return a clearly-invalid dict (status=False) without copying the zeros.
+    if not ld.status or ld.aLeadTau == 0.0 or ld.modelProb < 0.3:
+      return {"status": False}
+
+    # Bug #2 sanity check: carControlSP sometimes diverges from radarState due
+    # to ZMQ async delivery — vLead up to 115 km/h and dRel down to -120 m have
+    # been observed (routes 58e/58f). Clamp to physically plausible values.
+    d_rel = ld.dRel
+    v_lead = ld.vLead
+    if d_rel < -10.0 or abs(v_lead) > 80.0:
+      # Values are stale/invalid — suppress the lead rather than send garbage.
+      return {"status": False}
+
     return {
-      "dRel": ld.dRel,
+      "dRel": d_rel,
       "yRel": ld.yRel,
       "vRel": ld.vRel,
       "aRel": ld.aRel,
-      "vLead": ld.vLead,
+      "vLead": v_lead,
       "dPath": ld.dPath,
       "vLat": ld.vLat,
       "vLeadK": ld.vLeadK,
