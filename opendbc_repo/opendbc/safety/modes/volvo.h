@@ -74,12 +74,8 @@ static void volvo_rx_hook(const CANPacket_t *msg) {
     }
   } else if (msg->bus == VOLVO_CAM_BUS) {
     if (msg->addr == VOLVO_EUCD_FSM0) {
-      // Signal: ACC_Available (bit 1 of byte 2) — set whenever ACC is on (cruise or following).
-      // ACC_Enabled (bit 2) is only set in "following" mode (~17% of time), which caused
-      // controls_allowed=false during cruise-without-lead and forwarded stock FSM3 to ECM
-      // at +1.4 m/s² despite OP commanding negative accel (drive 589 seg 20 analysis).
-      // ACC_Available is set in all ACC-active states (0x82 cruise, 0x86/0x87 following).
-      bool cruise_engaged = (GET_BYTES(msg, 2, 1) & 0x02U) != 0U;
+      // Signal: ACC_Enabled (bit 2 of byte 2) — set when ACC is actively controlling.
+      bool cruise_engaged = (GET_BYTES(msg, 2, 1) & 0x04U) != 0U;
       pcm_cruise_check(cruise_engaged);
     }
   }
