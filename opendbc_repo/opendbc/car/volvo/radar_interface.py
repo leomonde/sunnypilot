@@ -5,6 +5,10 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import RadarInterfaceBase
 from opendbc.car.volvo.values import CANBUS, DBC
 
+# Synthetic track address for the virtual lead injected when OP long is active
+# and no real ESR target is present. Chosen outside the ESR range (0x500-0x53F).
+VIRT_LEAD_ADDR = 0x9999
+
 # Delphi ESR 2.5: 64 track slots at 0x500..0x53F, 20Hz each. On V60 EUCD the
 # FLR streams these to the FSM over a private CAN; the comma harness taps that
 # private bus, so the panda exposes the full raw stream on CANBUS.body (bus 1).
@@ -31,6 +35,12 @@ def _create_radar_can_parser(CP) -> CANParser:
   return CANParser(DBC[CP.carFingerprint][Bus.radar], messages, CANBUS.body)
 
 
+def _create_speed_parser(CP) -> CANParser:
+  # Reads vehicle speed from pt bus so the virtual lead distance can be computed
+  # in radar_interface without coupling to carcontroller's internal state.
+  return CANParser(DBC[CP.carFingerprint][Bus.pt], [("VehicleSpeed1", 50)], CANBUS.pt)
+
+
 class RadarInterface(RadarInterfaceBase):
   def __init__(self, CP, CP_SP):
     super().__init__(CP, CP_SP)
@@ -38,6 +48,8 @@ class RadarInterface(RadarInterfaceBase):
     self.valid_cnt: dict[int, int] = {addr: 0 for addr in DELPHI_ESR_TRACK_ADDRS}
     self.track_id = 0
     self.rcp = None if CP.radarUnavailable else _create_radar_can_parser(CP)
+    # Speed parser — needed for virtual lead injection when oplong active.
+    self.scp = _create_speed_parser(CP) if CP.openpilotLongitudinalControl else None
 
   def update(self, can_strings):
     if self.rcp is None:
@@ -88,6 +100,40 @@ class RadarInterface(RadarInterfaceBase):
         self.pts[addr].measured = True
       elif self.valid_cnt[addr] < MIN_VALID_CNT and addr in self.pts:
         del self.pts[addr]
+
+    # Virtual lead injection — when OP long is active and the ESR has no real
+    # targets, inject a synthetic point mirroring what carcontroller sends to
+    # the ECM (dRel = 1.5 s headway, vRel = 0 = same speed as ego).
+    # Without this, the planner sees no lead at all and computes a large
+    # positive aTarget (accelerate to setpoint), opposite of the ECM which
+    # sees the virtual lead and tries to follow it. With the synthetic point
+    # the planner's aTarget aligns with what the ECM expects: maintain current
+    # speed / follow the virtual lead rather than aggressively accelerating.
+    # vRel=0 is the conservative safe choice; real deceleration is triggered
+    # by the planner's setpoint logic (setpoint < vEgo) and by the FSM3/FSM4
+    # signals sent to the ECM.
+    real_pts_exist = any(addr != VIRT_LEAD_ADDR for addr in self.pts)
+    if self.scp is not None and not real_pts_exist:
+      self.scp.update(can_strings)
+      v_ego = self.scp.vl["VehicleSpeed1"]["VehicleSpeed"] * CV.KPH_TO_MS
+      if v_ego > 0.5:  # only inject when moving — SNG handles the standstill case
+        virt_dist = max(10.0, v_ego * 1.5)
+        if VIRT_LEAD_ADDR not in self.pts:
+          self.pts[VIRT_LEAD_ADDR] = structs.RadarData.RadarPoint()
+          self.pts[VIRT_LEAD_ADDR].trackId = self.track_id
+          self.track_id += 1
+        p = self.pts[VIRT_LEAD_ADDR]
+        p.dRel = virt_dist
+        p.yRel = 0.0
+        p.vRel = 0.0        # same speed as ego; prevents aggressive acceleration
+        p.aRel = float("nan")
+        p.yvRel = float("nan")
+        p.measured = True
+      elif VIRT_LEAD_ADDR in self.pts:
+        del self.pts[VIRT_LEAD_ADDR]
+    elif real_pts_exist and VIRT_LEAD_ADDR in self.pts:
+      # Real target appeared — remove synthetic point so it doesn't interfere
+      del self.pts[VIRT_LEAD_ADDR]
 
     ret.points = list(self.pts.values())
     return ret
