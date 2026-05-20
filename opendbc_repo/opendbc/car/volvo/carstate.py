@@ -53,13 +53,7 @@ class CarState(CarStateBase):
     ret.cruiseState.speed = pt_cp.vl["ACC_Speed"]["ACC_Speed"] * CV.KPH_TO_MS
     ret.cruiseState.speedCluster = ret.cruiseState.speed
     ret.cruiseState.available = bool(cam_cp.vl["FSM0"]["ACC_Available"])
-    # ACC_Available (bit 0x02) is set whenever ACC is actively controlling (speed set,
-    # cruise or following mode — byte2=0x82 or 0x86/0x87). ACC_Enabled (bit 0x04) is
-    # only set in following mode (~3% without lead), causing latActive/longActive=False
-    # during cruise-without-lead and breaking both lateral and longitudinal control.
-    # Panda's pcm_cruise_check was fixed to use ACC_Available (TEST21); carstate must
-    # match so OP engages whenever panda allows.
-    ret.cruiseState.enabled = bool(cam_cp.vl["FSM0"]["ACC_Available"])
+    ret.cruiseState.enabled = bool(cam_cp.vl["FSM0"]["ACC_Enabled"])
     # standstill hold; SNG uses this to time the resume blast (hard-cancel without it, drive 38)
     ret.cruiseState.standstill = bool(cam_cp.vl["FSM3"]["ACC_Standstill"])
     ret.cruiseState.nonAdaptive = False
