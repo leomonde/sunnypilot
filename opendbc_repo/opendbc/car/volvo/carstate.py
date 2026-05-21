@@ -121,6 +121,10 @@ class CarState(CarStateBase):
     # TSR speed limit from camera (0 = no sign)
     tsr_raw = cam_cp.vl["FSM5"]["TSR_Speed"]
     ret_sp.speedLimit = tsr_raw * CV.KPH_TO_MS if tsr_raw > 0 else 0.0
+    # Expose to carcontroller so the virtual lead can use the speed limit
+    # directly instead of vEgo + accel*1.5 (which creates an unstable chasing
+    # target that triggers ACC cancellation after ~3 s — route 590 seg3).
+    self.tsr_speed_ms = ret_sp.speedLimit
 
     self.frame += 1
     return ret, ret_sp

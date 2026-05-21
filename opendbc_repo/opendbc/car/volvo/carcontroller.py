@@ -214,12 +214,25 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
 
       # FSM4 virtual lead — always active when longActive and no real lead.
       # Lead speed = ego + accel*1.5s lookahead (mirrors FSM1 logic above).
+      # Exception: when TSR/SLA has an active speed limit below vEgo, use the
+      # limit as the virtual lead speed directly. This simulates a real car
+      # travelling at the speed limit in front of us, so the Volvo ACC follows
+      # it naturally without needing ACC setpoint button presses. Using
+      # vEgo + accel*1.5 when SLA is active creates a "chasing" target that
+      # always stays ~1 m/s below vEgo — the ACC detects this as an unstable
+      # lead and cancels after ~3 s of persistent deceleration (route 590 seg3).
       # Byte_2: TTC×10 when closing (ego faster), else empirical from log analysis (ego_kmh×1.15≈70 at 60km/h).
       # brake_b5: B5=0xF3 when hard braking (stock confirmed drive 589 seg22: accel<-0.5 m/s²).
       #   B5=0xF2 for very hard braking (accel<-1.0). Required for ECM hydraulic brake activation.
       no_real_lead = int(CS.stock_FSM1["ACC_Distance"]) >= 200
       if self.CP.openpilotLongitudinalControl and CC.longActive and no_real_lead:
-        virt_lead_ms = max(0.5, CS.out.vEgo + self.last_op_accel * 1.5)
+        tsr_ms = getattr(CS, 'tsr_speed_ms', 0.0)
+        if tsr_ms > 0 and tsr_ms < CS.out.vEgo:
+          # TSR speed limit active and below current speed: present a stable
+          # virtual lead at exactly the limit so the ACC follows it naturally.
+          virt_lead_ms = tsr_ms
+        else:
+          virt_lead_ms = max(0.5, CS.out.vEgo + self.last_op_accel * 1.5)
         virt_lead_kmh = virt_lead_ms * CV.MS_TO_KPH
         virt_dist_m = max(10.0, CS.out.vEgo * 1.5)
         closing_ms = max(0.0, CS.out.vEgo - virt_lead_ms)
