@@ -85,37 +85,47 @@ def compute_virtual_lead(accel_ms2: float, vEgo_ms: float) -> dict:
 
   Model (45 732 samples, RMSE 0.144 m/s²):
     AccelReq = KP*(dist - TGAP*vEgo) + KV*ΔV_kmh + OFFSET
+
+  Strategy: solve for dist_v with ΔV=0 first. D_MIN/D_MAX are hardware
+  limits — only then switch to ΔV to cover what distance alone cannot.
+  This makes the virtual distance scale naturally with speed.
   """
   KP     = 0.01893   # m/s² per m of distance error
   KV     = 0.06595   # m/s² per km/h of ΔV
   OFFSET = -0.1049   # m/s²
   TGAP   = 0.8       # seconds
-  D_MIN  = 15.0      # m (FSM hardware minimum)
+  D_MIN  = 15.0      # m (FSM hardware minimum observed)
   D_MAX  = 70.0      # m (FSM hardware maximum observed)
 
   vEgo_kmh    = vEgo_ms * 3.6
   dist_target = TGAP * vEgo_ms
   accel       = max(-1.36, min(1.36, accel_ms2))
 
+  # Primary inversion: keep ΔV = 0, vary distance
+  delta_v = 0.0
+  dist_v  = (accel - OFFSET) / KP + dist_target
+
+  if dist_v > D_MAX:
+    # Too far — cap at D_MAX and compensate with positive ΔV (lead faster)
+    dist_v  = D_MAX
+    delta_v = (accel - KP * (D_MAX - dist_target) - OFFSET) / KV
+  elif dist_v < D_MIN:
+    # Too close — cap at D_MIN and compensate with negative ΔV (lead slower)
+    dist_v  = D_MIN
+    delta_v = (accel - KP * (D_MIN - dist_target) - OFFSET) / KV
+
+  vLead_kmh = max(0.0, vEgo_kmh + delta_v)
+  delta_v   = vLead_kmh - vEgo_kmh  # recalculate after 0-clamp
+
+  # FSM3 state hints based on acceleration direction and magnitude
   if accel >= 0:
-    # Acceleration: increase virtual distance, keep ΔV = 0
-    delta_v = 0.0
-    dist_v  = (accel - OFFSET) / KP + dist_target
-    if dist_v > D_MAX:
-      dist_v  = D_MAX
-      delta_v = (accel - KP * (D_MAX - dist_target) - OFFSET) / KV
     target_state = 0xB8
     byte2_fsm3   = 214
   else:
-    # Deceleration: pin distance to minimum, reduce virtual lead speed
-    dist_v  = D_MIN
-    delta_v = (accel - KP * (D_MIN - dist_target) - OFFSET) / KV
-    vLead_kmh = max(0.0, vEgo_kmh + delta_v)
-    delta_v   = vLead_kmh - vEgo_kmh
-    target_state = 0xBC if accel < -0.2 else 0xB8
-    byte2_fsm3   = 212
+    # 0xBC activates stronger braking path; use it when distance is pegged at D_MIN
+    target_state = 0xBC if dist_v <= D_MIN else 0xB8
+    byte2_fsm3   = 212 if accel < -0.1 else 214
 
-  vLead_kmh = vEgo_kmh + delta_v
   # confidence 255 close-in, decays ~0.15/m beyond 20 m, floor 241
   lead_conf = max(241, min(255, round(255 - max(0.0, dist_v - 20.0) * 0.15)))
 
