@@ -60,11 +60,22 @@ def create_fsm0(packer, stock_fsm0, virtual_lead_active=False):
   # Relay FSM0 at 100 Hz; override ACC_FrontCar=1 when virtual lead is active
   # so the ECU enters follow mode (not just cruise). Without this bit set, the
   # ECU ignores FSM1 distance and FSM4 lead speed entirely (observed: route 599).
+  # All non-overridden bits are forwarded verbatim using the raw byte fields
+  # added to the DBC (Byte_0/1, Byte_2_upper, Byte_3_high/low, Byte_4-7).
   values = {
     "ACC_Available":  int(stock_fsm0["ACC_Available"]),
     "ACC_Enabled":    int(stock_fsm0["ACC_Enabled"]),
     "ACC_BrakeAlert": int(stock_fsm0["ACC_BrakeAlert"]),
     "ACC_FrontCar":   1 if virtual_lead_active else int(stock_fsm0["ACC_FrontCar"]),
+    "Byte_0":         int(stock_fsm0["Byte_0"]),
+    "Byte_1":         int(stock_fsm0["Byte_1"]),
+    "Byte_2_upper":   int(stock_fsm0["Byte_2_upper"]),
+    "Byte_3_high":    int(stock_fsm0["Byte_3_high"]),
+    "Byte_3_low":     int(stock_fsm0["Byte_3_low"]),
+    "Byte_4":         int(stock_fsm0["Byte_4"]),
+    "Byte_5":         int(stock_fsm0["Byte_5"]),
+    "Byte_6":         int(stock_fsm0["Byte_6"]),
+    "Byte_7":         int(stock_fsm0["Byte_7"]),
   }
   return packer.make_can_msg("FSM0", 0, values)
 
@@ -205,4 +216,16 @@ def create_lead_speed(packer, vLead_kmh: float, stock_fsm4: dict, frame: int):
     "Byte_6":       int(stock_fsm4.get("Byte_6", 0)),
     "Byte_7":       int(stock_fsm4.get("Byte_7", 0)),
   }
+  return packer.make_can_msg("FSM4", 0, values)
+
+
+def create_fsm4_passthrough(packer, stock_fsm4: dict):
+  # Pure relay of stock FSM4 — used when oplong is inactive so the ECU receives
+  # exactly what the camera would send. create_lead_speed has hardcoded Byte_1/
+  # Byte_4 tuned for virtual-lead mode; those values are wrong in normal ACC mode
+  # and cause ECU consistency faults when ICBM is active with oplong disabled.
+  values = {s: stock_fsm4[s] for s in (
+    "Byte_0", "Byte_1", "Byte_2", "ACC_LeadSpeed",
+    "Byte_4", "Byte_5", "Byte_6", "Byte_7",
+  )}
   return packer.make_can_msg("FSM4", 0, values)

@@ -192,9 +192,10 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         # so the first active tick starts from a consistent value.
         self._vl_accel_prev = float(CS.stock_FSM3["ACC_AccelerationRequest"])
         can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1))
-        can_sends.append(volvocan.create_lead_speed(self.packer_pt,
-                         float(CS.stock_FSM4.get("ACC_LeadSpeed", vEgo_ms * 3.6)),
-                         CS.stock_FSM4, self.frame))
+        # Relay FSM4 with all stock bytes — create_lead_speed hardcodes Byte_1/
+        # Byte_4 for virtual-lead mode; those values cause ECU faults in normal
+        # ACC mode (e.g. when ICBM is active with oplong disabled).
+        can_sends.append(volvocan.create_fsm4_passthrough(self.packer_pt, CS.stock_FSM4))
         accel  = float(CS.stock_FSM3["ACC_AccelerationRequest"])
         byte2  = None
 

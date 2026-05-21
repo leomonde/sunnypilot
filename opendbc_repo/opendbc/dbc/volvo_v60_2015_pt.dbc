@@ -51,6 +51,15 @@ BO_ 81 FSM0: 8 FSM
  SG_ ACC_Available : 17|1@0+ (1,0) [0|7] "" XXX
  SG_ ACC_Enabled : 18|1@0+ (1,0) [0|1] "" XXX
  SG_ ACC_BrakeAlert : 27|1@0+ (1,0) [0|1] "" XXX
+ SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_2_upper : 23|5@0+ (1,0) [0|31] "" XXX
+ SG_ Byte_3_high : 31|4@0+ (1,0) [0|15] "" XXX
+ SG_ Byte_3_low : 26|3@0+ (1,0) [0|7] "" XXX
+ SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
+ SG_ Byte_7 : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 277 NEW_MSG_7: 8 XXX
  SG_ NEW_SIGNAL_1 : 39|16@0+ (1,0) [0|65535] "" XXX
