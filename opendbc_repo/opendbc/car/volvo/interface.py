@@ -36,7 +36,7 @@ class CarInterface(CarInterfaceBase):
     ret.steerActuatorDelay = 0.2
     ret.steerLimitTimer = 0.8
 
-    ret.openpilotLongitudinalControl = False
+    ret.openpilotLongitudinalControl = True
 
     return ret
 

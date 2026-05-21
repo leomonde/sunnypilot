@@ -26,6 +26,16 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.steer_blocked_cnt = 0
     self.steer_dir_bf_block = SteerDirection.NONE
 
+    # Virtual lead smoothing state (oplong)
+    self._vl_dist_prev: float = 25.0   # m
+    self._vl_vlead_prev: float = 0.0   # km/h
+
+    # Minimum ego speed to activate virtual lead (30 km/h)
+    self.OPLONG_MIN_SPEED_MS: float = 30.0 / 3.6
+    # Rate limits per 20 ms tick at 50 Hz
+    self._VL_DIST_RATE: float  = 5.0   # m/s
+    self._VL_VLEAD_RATE: float = 3.0   # km/h per tick
+
     # Custom ACC increment: read once at init, refreshed every 100 frames.
     # Passed to carstate so _pending_delta emits the right number of events.
     self._params = Params()
@@ -123,9 +133,9 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         self.waiting = False
         self.last_resume_frame = self.frame
 
-    # FSM3/FSM1 at 50Hz wall-clock: relay stock values so ECU doesn't fault.
-    # (complex fwd_hook blocks stock FSM3/FSM1 when controls_allowed && !gas_pressed)
-    # Override ACC_Check=1 during SNG resume blast so ECU acknowledges OP's CCButtons resume.
+    # FSM1/FSM3/FSM4 at 50 Hz wall-clock: fwd_hook blocks stock cam→main when
+    # controls_allowed && !gas_pressed, so OP must relay all three to prevent faults.
+    # Virtual lead is injected into FSM1/FSM4 when CC.longActive at ≥30 km/h.
     long_tx_due = now_nanos >= self.next_long_tx_nanos
     if long_tx_due:
       next_tx = self.next_long_tx_nanos + self.LONG_TX_PERIOD_NANOS
@@ -133,15 +143,50 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         next_tx = now_nanos + self.LONG_TX_PERIOD_NANOS
       self.next_long_tx_nanos = next_tx
 
-      accel = float(CS.stock_FSM3["ACC_AccelerationRequest"])
       if self.sng_ack_frames > 0:
         acc_check = 1
         self.sng_ack_frames -= 1
       else:
         acc_check = int(CS.stock_FSM3["ACC_Check"])
 
-      can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, False))
-      can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, accel, acc_check))
+      vEgo_ms     = CS.out.vEgo
+      long_active = CC.longActive and vEgo_ms >= self.OPLONG_MIN_SPEED_MS
+
+      if long_active:
+        # Compute virtual lead from OP's desired accel
+        vl = volvocan.compute_virtual_lead(float(actuators.accel), vEgo_ms)
+
+        # Safety: if the real FSM reports a lead car closer than our virtual,
+        # always use the closer distance so the ACC brakes at least as hard.
+        real_dist = float(CS.acc_distance)
+        if real_dist > 0 and real_dist < vl['dist_virtual']:
+          vl['dist_virtual'] = real_dist
+
+        # Rate-limit virtual dist and lead speed for smooth transitions
+        dt_m  = self._VL_DIST_RATE  * 0.02
+        vl['dist_virtual'] = max(vl['dist_virtual'], self._vl_dist_prev - dt_m)
+        vl['dist_virtual'] = min(vl['dist_virtual'], self._vl_dist_prev + dt_m)
+        vl['vLead_kmh']    = max(vl['vLead_kmh'], self._vl_vlead_prev - self._VL_VLEAD_RATE)
+        vl['vLead_kmh']    = min(vl['vLead_kmh'], self._vl_vlead_prev + self._VL_VLEAD_RATE)
+        self._vl_dist_prev  = vl['dist_virtual']
+        self._vl_vlead_prev = vl['vLead_kmh']
+
+        can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, virtual_lead=vl))
+        can_sends.append(volvocan.create_lead_speed(self.packer_pt, vl['vLead_kmh'], CS.stock_FSM4, self.frame))
+        accel  = vl['accel_request']
+        byte2  = vl['byte2_fsm3']
+      else:
+        # Not in oplong mode or below min speed: reset smoothing, relay stock.
+        self._vl_dist_prev  = float(CS.acc_distance) if CS.acc_distance > 0 else 25.0
+        self._vl_vlead_prev = vEgo_ms * 3.6
+        can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1))
+        can_sends.append(volvocan.create_lead_speed(self.packer_pt,
+                         float(CS.stock_FSM4.get("ACC_LeadSpeed", vEgo_ms * 3.6)),
+                         CS.stock_FSM4, self.frame))
+        accel  = float(CS.stock_FSM3["ACC_AccelerationRequest"])
+        byte2  = None
+
+      can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, accel, acc_check, byte2=byte2))
 
     # Refresh custom ACC step every 100 frames and forward to carstate so that
     # _pending_delta emits exactly one synthetic event per physical ACC step.

@@ -19,6 +19,7 @@ class CarState(CarStateBase):
     self._pending_delta = 0
     self._icbm_suppress_frames = 0
     self._custom_acc_step = 1  # set by carcontroller each frame; default 1 km/h
+    self.stock_FSM4: dict = {}  # populated each frame; used for FSM4 relay/virtual lead
 
   def update(self, can_parsers) -> structs.CarState:
     pt_cp = can_parsers[Bus.pt]
@@ -119,6 +120,7 @@ class CarState(CarStateBase):
     self.pscm_stock_values = pt_cp.vl["PSCM1"]
     self.stock_FSM1 = copy.copy(cam_cp.vl["FSM1"])
     self.stock_FSM3 = copy.copy(cam_cp.vl["FSM3"])
+    self.stock_FSM4 = copy.copy(cam_cp.vl["FSM4"])
     self.ACC_Check = cam_cp.vl["FSM3"]["ACC_Check"]
 
     # TSR speed limit from camera (0 = no sign)
@@ -146,6 +148,7 @@ class CarState(CarStateBase):
       ("FSM0", 100),
       ("FSM1", 50),
       ("FSM3", 50),
+      ("FSM4", 50),
       ("FSM5", 10),
     ]
 
