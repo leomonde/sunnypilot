@@ -19,6 +19,7 @@ class CarState(CarStateBase):
     self._pending_delta = 0
     self._icbm_suppress_frames = 0
     self._custom_acc_step = 1  # set by carcontroller each frame; default 1 km/h
+    self.stock_FSM0: dict = {}  # populated each frame; used for FSM0 relay (ACC_FrontCar override)
     self.stock_FSM4: dict = {}  # populated each frame; used for FSM4 relay/virtual lead
 
   def update(self, can_parsers) -> structs.CarState:
@@ -118,6 +119,7 @@ class CarState(CarStateBase):
     ret.seatbeltUnlatched = False
 
     self.pscm_stock_values = pt_cp.vl["PSCM1"]
+    self.stock_FSM0 = copy.copy(cam_cp.vl["FSM0"])
     self.stock_FSM1 = copy.copy(cam_cp.vl["FSM1"])
     self.stock_FSM3 = copy.copy(cam_cp.vl["FSM3"])
     self.stock_FSM4 = copy.copy(cam_cp.vl["FSM4"])

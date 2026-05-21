@@ -56,6 +56,19 @@ def create_lka_msg(packer, apply_steer: float, steer_direction: int):
   return packer.make_can_msg("FSM2", 0, values)
 
 
+def create_fsm0(packer, stock_fsm0, virtual_lead_active=False):
+  # Relay FSM0 at 100 Hz; override ACC_FrontCar=1 when virtual lead is active
+  # so the ECU enters follow mode (not just cruise). Without this bit set, the
+  # ECU ignores FSM1 distance and FSM4 lead speed entirely (observed: route 599).
+  values = {
+    "ACC_Available":  int(stock_fsm0["ACC_Available"]),
+    "ACC_Enabled":    int(stock_fsm0["ACC_Enabled"]),
+    "ACC_BrakeAlert": int(stock_fsm0["ACC_BrakeAlert"]),
+    "ACC_FrontCar":   1 if virtual_lead_active else int(stock_fsm0["ACC_FrontCar"]),
+  }
+  return packer.make_can_msg("FSM0", 0, values)
+
+
 def create_longitudinal(packer, stock_fsm3, accel, acc_check, byte2=None):
   # pass stock FSM3 verbatim except ACC_AccelerationRequest and ACC_Check; bit flip faults ECU (drive 27)
   values = {s: stock_fsm3[s] for s in (
@@ -75,6 +88,12 @@ def create_longitudinal(packer, stock_fsm3, accel, acc_check, byte2=None):
   }
   if byte2 is not None:
     values["Byte_2"] = byte2
+    # Byte_01 bit 3 (value 8) signals "FrontCar active" to the ECU.
+    # Stock FSM3 sends 29 (0b11101) with lead car, 21 (0b10101) without.
+    # When relaying with virtual lead we must set this bit or the ECU stays
+    # in cruise mode and ignores FSM1/FSM4 lead data (observed: route 599).
+    values["Byte_01"] = 29
+    values["Byte_02"] = 1
   return packer.make_can_msg("FSM3", 0, values)
 
 
@@ -126,8 +145,10 @@ def compute_virtual_lead(accel_ms2: float, vEgo_ms: float) -> dict:
     target_state = 0xBC if dist_v <= D_MIN else 0xB8
     byte2_fsm3   = 212 if accel < -0.1 else 214
 
-  # confidence 255 close-in, decays ~0.15/m beyond 20 m, floor 241
-  lead_conf = max(241, min(255, round(255 - max(0.0, dist_v - 20.0) * 0.15)))
+  # confidence 255 close-in, decays ~0.15/m beyond 20 m, floor 248
+  # Route 58f showed ACC_LeadConf ≥ 248 consistently; lower values caused FSM
+  # to reject the target. Keep floor at 248 to match real radar behaviour.
+  lead_conf = max(248, min(255, round(255 - max(0.0, dist_v - 20.0) * 0.15)))
 
   return {
     'dist_virtual': round(dist_v, 1),
@@ -142,14 +163,19 @@ def compute_virtual_lead(accel_ms2: float, vEgo_ms: float) -> dict:
 
 def create_radar(packer, stock_fsm1, virtual_lead=None):
   if virtual_lead is not None:
+    target_state = virtual_lead['target_state']
+    # Route 58f analysis: Byte_4=73 and Byte_6=116 when TargetState=184/188
+    # (active follow), else 0/20 (no target). Must derive from target_state,
+    # NOT pass stock values — stock had no virtual lead so its Byte_4/6 were 0.
+    following = target_state in (0xB8, 0xBC)  # 184 steady-follow, 188 active-tracking
     values = {
       "ACC_Distance":    int(max(15, min(70, virtual_lead['dist_virtual']))),
       "ACC_LeadConf":    virtual_lead['lead_conf'],
-      "ACC_TargetState": virtual_lead['target_state'],
+      "ACC_TargetState": target_state,
       "Byte_3": 0,
-      "Byte_4": int(stock_fsm1.get("Byte_4", 0)),
+      "Byte_4": 73 if following else 0,
       "Byte_5": 227,
-      "Byte_6": int(stock_fsm1.get("Byte_6", 0)),
+      "Byte_6": 116 if following else 20,
       "Byte_7": 8,
     }
   else:

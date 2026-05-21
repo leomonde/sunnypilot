@@ -27,14 +27,16 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.steer_dir_bf_block = SteerDirection.NONE
 
     # Virtual lead smoothing state (oplong)
-    self._vl_dist_prev: float = 25.0   # m
-    self._vl_vlead_prev: float = 0.0   # km/h
+    # Rate-limit on accel (not dist/vLead separately) so FSM1/FSM3/FSM4 stay
+    # mutually consistent: compute_virtual_lead derives dist and vLead from the
+    # same rate-limited accel that goes into FSM3, eliminating the mismatch that
+    # caused the ECM to kill ACC during re-engagement transitions.
+    self._vl_accel_prev: float = 0.0   # m/s², tracks rate-limited accel
 
     # Minimum ego speed to activate virtual lead (30 km/h)
     self.OPLONG_MIN_SPEED_MS: float = 30.0 / 3.6
-    # Rate limits per 20 ms tick at 50 Hz
-    self._VL_DIST_RATE: float  = 5.0   # m/s
-    self._VL_VLEAD_RATE: float = 3.0   # km/h per tick
+    # Max accel change per 20 ms tick: 0.5 m/s² → 25 m/s³ jerk limit
+    self._VL_ACCEL_RATE: float = 0.5   # m/s² per tick
 
     # Custom ACC increment: read once at init, refreshed every 100 frames.
     # Passed to carstate so _pending_delta emits the right number of events.
@@ -61,6 +63,16 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
 
     actuators = CC.actuators
     pcm_cancel_cmd = CC.cruiseControl.cancel
+
+    # Compute long_active once so both the FSM0 relay (100 Hz) and the
+    # long_tx_due block (50 Hz) use the same value.
+    long_active = CC.longActive and CS.out.vEgo >= self.OPLONG_MIN_SPEED_MS
+
+    # Relay FSM0 at 100 Hz (its native rate). fwd_hook blocks stock cam FSM0
+    # when controls_allowed so the ECU only sees OP's version. ACC_FrontCar is
+    # set to 1 while virtual lead is active — without it the ECU ignores FSM1/
+    # FSM4 lead data and stays in cruise mode (observed: route 599 analysis).
+    can_sends.append(volvocan.create_fsm0(self.packer_pt, CS.stock_FSM0, long_active))
 
     # TODO: verify if this minSteerSpeed guard is still needed
     if pcm_cancel_cmd and CS.out.vEgo > self.CP.minSteerSpeed:
@@ -149,12 +161,21 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       else:
         acc_check = int(CS.stock_FSM3["ACC_Check"])
 
-      vEgo_ms     = CS.out.vEgo
-      long_active = CC.longActive and vEgo_ms >= self.OPLONG_MIN_SPEED_MS
+      vEgo_ms = CS.out.vEgo
 
       if long_active:
-        # Compute virtual lead from OP's desired accel
-        vl = volvocan.compute_virtual_lead(float(actuators.accel), vEgo_ms)
+        # Rate-limit on accel so FSM1/FSM3/FSM4 are always derived from the
+        # same value — previously dist and vLead were limited independently
+        # while FSM3 sent the raw accel, causing ~2× mismatch during
+        # re-engagement that made the Volvo ECM kill ACC.
+        dt_accel = self._VL_ACCEL_RATE * 0.02
+        accel_raw = float(actuators.accel)
+        accel_limited = max(accel_raw, self._vl_accel_prev - dt_accel)
+        accel_limited = min(accel_limited, self._vl_accel_prev + dt_accel)
+        self._vl_accel_prev = accel_limited
+
+        # Compute virtual lead from rate-limited accel; dist/vLead now consistent with FSM3.
+        vl = volvocan.compute_virtual_lead(accel_limited, vEgo_ms)
 
         # Safety: if the real FSM reports a lead car closer than our virtual,
         # always use the closer distance so the ACC brakes at least as hard.
@@ -162,23 +183,14 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         if real_dist > 0 and real_dist < vl['dist_virtual']:
           vl['dist_virtual'] = real_dist
 
-        # Rate-limit virtual dist and lead speed for smooth transitions
-        dt_m  = self._VL_DIST_RATE  * 0.02
-        vl['dist_virtual'] = max(vl['dist_virtual'], self._vl_dist_prev - dt_m)
-        vl['dist_virtual'] = min(vl['dist_virtual'], self._vl_dist_prev + dt_m)
-        vl['vLead_kmh']    = max(vl['vLead_kmh'], self._vl_vlead_prev - self._VL_VLEAD_RATE)
-        vl['vLead_kmh']    = min(vl['vLead_kmh'], self._vl_vlead_prev + self._VL_VLEAD_RATE)
-        self._vl_dist_prev  = vl['dist_virtual']
-        self._vl_vlead_prev = vl['vLead_kmh']
-
         can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, virtual_lead=vl))
         can_sends.append(volvocan.create_lead_speed(self.packer_pt, vl['vLead_kmh'], CS.stock_FSM4, self.frame))
         accel  = vl['accel_request']
         byte2  = vl['byte2_fsm3']
       else:
-        # Not in oplong mode or below min speed: reset smoothing, relay stock.
-        self._vl_dist_prev  = float(CS.acc_distance) if CS.acc_distance > 0 else 25.0
-        self._vl_vlead_prev = vEgo_ms * 3.6
+        # Not in oplong mode or below min speed: seed smoothing with stock accel
+        # so the first active tick starts from a consistent value.
+        self._vl_accel_prev = float(CS.stock_FSM3["ACC_AccelerationRequest"])
         can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1))
         can_sends.append(volvocan.create_lead_speed(self.packer_pt,
                          float(CS.stock_FSM4.get("ACC_LeadSpeed", vEgo_ms * 3.6)),
@@ -194,12 +206,14 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       self._custom_acc_step = max(1, int(self._params.get("CustomAccShortPressIncrement", return_default=True) or 1))
     CS._custom_acc_step = self._custom_acc_step
 
-    # Intelligent Cruise Button Management
-    icbm_sends = IntelligentCruiseButtonManagementInterface.update(self, CC_SP, CS, self.packer_pt, self.frame, self.last_button_frame)
-    if icbm_sends:
-      CS._pending_delta = 0
-      CS._icbm_suppress_frames = 25
-    can_sends.extend(icbm_sends)
+    # Intelligent Cruise Button Management — skip when oplong is active to avoid
+    # synthetic button presses disrupting the virtual-lead longitudinal control.
+    if not self.CP.openpilotLongitudinalControl:
+      icbm_sends = IntelligentCruiseButtonManagementInterface.update(self, CC_SP, CS, self.packer_pt, self.frame, self.last_button_frame)
+      if icbm_sends:
+        CS._pending_delta = 0
+        CS._icbm_suppress_frames = 25
+      can_sends.extend(icbm_sends)
 
     new_actuators = actuators.as_builder()
     new_actuators.steeringAngleDeg = self.apply_steer_prev
