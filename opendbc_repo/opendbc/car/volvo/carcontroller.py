@@ -60,9 +60,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     # OP's CCButtons resume unless FSM3 confirms it. Force 25 frames (~0.5s).
     self.sng_ack_frames = 0
 
-    # wall-clock gate for FSM3/FSM1 TX — frame%2 unreliable due to controlsd jitter
-    # complex fwd_hook blocks stock FSM3/FSM1 when controls_allowed && !gas_pressed,
-    # so OP must relay them at 50Hz to prevent ECU faults.
+    # wall-clock gate for FSM overlay TX at 50 Hz — frame%2 unreliable due to controlsd jitter
     self.next_long_tx_nanos = 0
     self.LONG_TX_PERIOD_NANOS = 20_000_000  # 50Hz, matching stock FSM3/FSM1
 
@@ -72,14 +70,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     actuators = CC.actuators
     pcm_cancel_cmd = CC.cruiseControl.cancel
 
-    # Compute long_active once so both the FSM0 relay (100 Hz) and the
-    # long_tx_due block (50 Hz) use the same value.
     long_active = CC.longActive and CS.out.vEgo >= self.OPLONG_MIN_SPEED_MS
-
-    # Relay FSM0 at 100 Hz regardless of oplong state: fwd_hook blocks
-    # cam→main FSM0 whenever controls_allowed, so stock never reaches the ECU.
-    # Set ACC_FrontCar=1 only when oplong is active (virtual lead mode).
-    can_sends.append(volvocan.create_fsm0(self.packer_pt, CS.stock_FSM0, long_active))
 
     # TODO: verify if this minSteerSpeed guard is still needed
     if pcm_cancel_cmd and CS.out.vEgo > self.CP.minSteerSpeed:
@@ -152,9 +143,9 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         self.waiting = False
         self.last_resume_frame = self.frame
 
-    # FSM1/FSM3/FSM4 at 50 Hz wall-clock: fwd_hook blocks stock cam→main when
-    # controls_allowed && !gas_pressed, so OP must relay all three to prevent faults.
-    # Virtual lead is injected into FSM1/FSM4 when CC.longActive at ≥30 km/h.
+    # FSM0/1/3/4 overlay at 50 Hz: when long_active, OP sends overlays that
+    # arrive ~10ms after stock (Python processing delay) and win via
+    # last-message-wins. When not long_active, no overlays — stock flows freely.
     long_tx_due = now_nanos >= self.next_long_tx_nanos
     if long_tx_due:
       next_tx = self.next_long_tx_nanos + self.LONG_TX_PERIOD_NANOS
@@ -162,15 +153,15 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         next_tx = now_nanos + self.LONG_TX_PERIOD_NANOS
       self.next_long_tx_nanos = next_tx
 
-      if self.sng_ack_frames > 0:
-        acc_check = 1
-        self.sng_ack_frames -= 1
-      else:
-        acc_check = int(CS.stock_FSM3["ACC_Check"])
-
       vEgo_ms = CS.out.vEgo
 
       if long_active:
+        if self.sng_ack_frames > 0:
+          acc_check = 1
+          self.sng_ack_frames -= 1
+        else:
+          acc_check = int(CS.stock_FSM3["ACC_Check"])
+
         # Rate-limit on accel so FSM1/FSM3/FSM4 are always derived from the
         # same value — previously dist and vLead were limited independently
         # while FSM3 sent the raw accel, causing ~2× mismatch during
@@ -202,23 +193,25 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         if real_dist > 0 and real_dist < vl['dist_virtual']:
           vl['dist_virtual'] = real_dist
 
+        can_sends.append(volvocan.create_fsm0(self.packer_pt, CS.stock_FSM0, True))
         can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, virtual_lead=vl))
         can_sends.append(volvocan.create_lead_speed(self.packer_pt, vl['vLead_kmh'], CS.stock_FSM4, byte0=self._fsm4_toggle))
-        accel  = vl['accel_request']
-        byte2  = vl['byte2_fsm3']
+        can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, vl['accel_request'], acc_check, byte2=vl['byte2_fsm3'], byte01=self._vl_byte01))
       else:
-        # Not in oplong mode or below min speed: seed smoothing with stock accel
-        # so the first active tick starts from a consistent value.
+        # Seed smoothing with stock accel so the first active tick starts
+        # from a consistent value when long_active becomes True.
         self._vl_accel_prev = float(CS.stock_FSM3["ACC_AccelerationRequest"])
-        can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1))
-        # Relay FSM4 with all stock bytes — create_lead_speed hardcodes Byte_1/
-        # Byte_4 for virtual-lead mode; those values cause ECU faults in normal
-        # ACC mode (e.g. when ICBM is active with oplong disabled).
-        can_sends.append(volvocan.create_fsm4_passthrough(self.packer_pt, CS.stock_FSM4))
-        accel  = float(CS.stock_FSM3["ACC_AccelerationRequest"])
-        byte2  = None
 
-      can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, accel, acc_check, byte2=byte2, byte01=self._vl_byte01 if byte2 is not None else None))
+        # SNG exception: overlay FSM3 with ACC_Check=1 to ack standstill resume.
+        # ECU ignores CCButtons resume unless FSM3 confirms it.
+        if self.sng_ack_frames > 0:
+          can_sends.append(volvocan.create_longitudinal(
+            self.packer_pt, CS.stock_FSM3,
+            float(CS.stock_FSM3["ACC_AccelerationRequest"]),
+            1, byte2=None, byte01=None
+          ))
+          self.sng_ack_frames -= 1
+        # else: stock FSM1/FSM3/FSM4 flow freely cam→main — no overlays needed
 
     # Refresh custom ACC step every 100 frames and forward to carstate so that
     # _pending_delta emits exactly one synthetic event per physical ACC step.
