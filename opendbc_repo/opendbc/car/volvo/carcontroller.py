@@ -76,11 +76,10 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     # long_tx_due block (50 Hz) use the same value.
     long_active = CC.longActive and CS.out.vEgo >= self.OPLONG_MIN_SPEED_MS
 
-    # Relay FSM0 only when virtual lead is active (needs ACC_FrontCar=1).
-    # When oplong is disabled, OP does not touch FSM0 — same as before oplong
-    # was introduced — so the ECU receives FSM0 unmodified from the camera.
-    if long_active:
-      can_sends.append(volvocan.create_fsm0(self.packer_pt, CS.stock_FSM0, True))
+    # Relay FSM0 at 100 Hz regardless of oplong state: fwd_hook blocks
+    # cam→main FSM0 whenever controls_allowed, so stock never reaches the ECU.
+    # Set ACC_FrontCar=1 only when oplong is active (virtual lead mode).
+    can_sends.append(volvocan.create_fsm0(self.packer_pt, CS.stock_FSM0, long_active))
 
     # TODO: verify if this minSteerSpeed guard is still needed
     if pcm_cancel_cmd and CS.out.vEgo > self.CP.minSteerSpeed:
