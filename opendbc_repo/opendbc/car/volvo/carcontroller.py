@@ -38,6 +38,14 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     # Max accel change per 20 ms tick: 0.5 m/s² → 25 m/s³ jerk limit
     self._VL_ACCEL_RATE: float = 0.5   # m/s² per tick
 
+    # FSM3 Byte_01: speed-dependent follow mode (route 5a0 analysis).
+    # 29 (0b11101) = FrontCar low-speed (<55 km/h); 21 (0b10101) = high-speed (>63 km/h).
+    # 7 km/h hysteresis: hold previous value in 55–63 km/h band.
+    self._vl_byte01: int = 29
+
+    # FSM4 Byte_0: rolling 1-bit counter toggles 85↔170 every send (route 5a0 analysis).
+    self._fsm4_toggle: int = 85
+
     # Custom ACC increment: read once at init, refreshed every 100 frames.
     # Passed to carstate so _pending_delta emits the right number of events.
     self._params = Params()
@@ -174,6 +182,18 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         accel_limited = min(accel_limited, self._vl_accel_prev + dt_accel)
         self._vl_accel_prev = accel_limited
 
+        # Byte_01 speed-dependent mode with 7 km/h hysteresis (route 5a0 analysis):
+        # 29 (FrontCar active, low speed) below 55 km/h; 21 (high speed) above 63 km/h.
+        vEgo_kmh = vEgo_ms * 3.6
+        if vEgo_kmh > 63.0:
+          self._vl_byte01 = 21
+        elif vEgo_kmh < 55.0:
+          self._vl_byte01 = 29
+        # else: hold previous value in 55–63 km/h hysteresis band
+
+        # FSM4 Byte_0 rolling counter: toggle 85↔170 every send (route 5a0 analysis).
+        self._fsm4_toggle = 170 if self._fsm4_toggle == 85 else 85
+
         # Compute virtual lead from rate-limited accel; dist/vLead now consistent with FSM3.
         vl = volvocan.compute_virtual_lead(accel_limited, vEgo_ms)
 
@@ -184,7 +204,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
           vl['dist_virtual'] = real_dist
 
         can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, virtual_lead=vl))
-        can_sends.append(volvocan.create_lead_speed(self.packer_pt, vl['vLead_kmh'], CS.stock_FSM4, self.frame))
+        can_sends.append(volvocan.create_lead_speed(self.packer_pt, vl['vLead_kmh'], CS.stock_FSM4, byte0=self._fsm4_toggle))
         accel  = vl['accel_request']
         byte2  = vl['byte2_fsm3']
       else:
@@ -199,7 +219,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         accel  = float(CS.stock_FSM3["ACC_AccelerationRequest"])
         byte2  = None
 
-      can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, accel, acc_check, byte2=byte2))
+      can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, accel, acc_check, byte2=byte2, byte01=self._vl_byte01 if byte2 is not None else None))
 
     # Refresh custom ACC step every 100 frames and forward to carstate so that
     # _pending_delta emits exactly one synthetic event per physical ACC step.

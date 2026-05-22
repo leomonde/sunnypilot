@@ -80,7 +80,7 @@ def create_fsm0(packer, stock_fsm0, virtual_lead_active=False):
   return packer.make_can_msg("FSM0", 0, values)
 
 
-def create_longitudinal(packer, stock_fsm3, accel, acc_check, byte2=None):
+def create_longitudinal(packer, stock_fsm3, accel, acc_check, byte2=None, byte01=None):
   # pass stock FSM3 verbatim except ACC_AccelerationRequest and ACC_Check; bit flip faults ECU (drive 27)
   values = {s: stock_fsm3[s] for s in (
     "ACC_Standstill",
@@ -100,11 +100,13 @@ def create_longitudinal(packer, stock_fsm3, accel, acc_check, byte2=None):
   if byte2 is not None:
     values["Byte_2"] = byte2
     # Byte_01 bit 3 (value 8) signals "FrontCar active" to the ECU.
-    # Stock FSM3 sends 29 (0b11101) with lead car, 21 (0b10101) without.
-    # When relaying with virtual lead we must set this bit or the ECU stays
-    # in cruise mode and ignores FSM1/FSM4 lead data (observed: route 599).
-    values["Byte_01"] = 29
+    # Stock FSM3 sends 29 (0b11101, <55 km/h) or 21 (0b10101, >63 km/h) with lead car.
+    # Caller passes the speed-dependent value with 7 km/h hysteresis (route 5a0 analysis).
+    values["Byte_01"] = byte01 if byte01 is not None else 29
     values["Byte_02"] = 1
+    # Route 5a0: ACC_Standstill must be 0 when virtual lead is active.
+    # If left at 1 (stock transient) the ECU ignores brake requests entirely.
+    values["ACC_Standstill"] = 0
   return packer.make_can_msg("FSM3", 0, values)
 
 
@@ -152,8 +154,8 @@ def compute_virtual_lead(accel_ms2: float, vEgo_ms: float) -> dict:
     target_state = 0xB8
     byte2_fsm3   = 214
   else:
-    # 0xBC activates stronger braking path; use it when distance is pegged at D_MIN
-    target_state = 0xBC if dist_v <= D_MIN else 0xB8
+    # 0xBC activates stronger braking path; real condition (route 5a0): delta_v < -2.5 km/h AND dist < 30 m
+    target_state = 0xBC if (delta_v < -2.5 and dist_v < 30.0) else 0xB8
     byte2_fsm3   = 212 if accel < -0.1 else 214
 
   # confidence 255 close-in, decays ~0.15/m beyond 20 m, floor 248
@@ -203,9 +205,9 @@ def create_radar(packer, stock_fsm1, virtual_lead=None):
   return packer.make_can_msg("FSM1", 0, values)
 
 
-def create_lead_speed(packer, vLead_kmh: float, stock_fsm4: dict, frame: int):
-  # Byte_0 alternates 85/170 — appears to be a rolling bit; match observed pattern
-  byte0 = 170 if (frame // 10) % 2 else 85
+def create_lead_speed(packer, vLead_kmh: float, stock_fsm4: dict, byte0: int = 85):
+  # Byte_0 alternates 85/170 every FSM4 send — rolling 1-bit counter (route 5a0 analysis).
+  # Caller is responsible for toggling byte0 on each call (see carcontroller _fsm4_toggle).
   values = {
     "Byte_0":       byte0,
     "Byte_1":       241,
