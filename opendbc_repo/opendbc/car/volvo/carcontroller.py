@@ -135,9 +135,11 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         next_tx = now_nanos + self.LONG_TX_PERIOD_NANOS
       self.next_long_tx_nanos = next_tx
 
-      long_active = CC.longActive
-      op_accel = float(actuators.accel) if long_active else float(CS.stock_FSM3["ACC_AccelerationRequest"])
       v_ego_ms = CS.out.vEgoRaw
+      # Below 30 km/h relay the real lead car from the stock FSM so SNG / low-speed
+      # following uses the actual camera data (or no lead if nothing is in front).
+      vlc_active = CC.longActive and v_ego_ms >= (30.0 / 3.6)
+      op_accel = float(actuators.accel) if CC.longActive else float(CS.stock_FSM3["ACC_AccelerationRequest"])
 
       if self.sng_ack_frames > 0:
         acc_check = 1
@@ -145,9 +147,9 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       else:
         acc_check = int(CS.stock_FSM3["ACC_Check"])
 
-      can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, long_active, op_accel, v_ego_ms))
+      can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, vlc_active, op_accel, v_ego_ms))
       can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, op_accel, acc_check))
-      can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4, long_active, op_accel, v_ego_ms, self.vlc_counter))
+      can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4, vlc_active, op_accel, v_ego_ms, self.vlc_counter))
       self.vlc_counter += 1
 
     # Refresh custom ACC step every 100 frames and forward to carstate so that
