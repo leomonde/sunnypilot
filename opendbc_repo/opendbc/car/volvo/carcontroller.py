@@ -40,11 +40,12 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     # OP's CCButtons resume unless FSM3 confirms it. Force 25 frames (~0.5s).
     self.sng_ack_frames = 0
 
-    # wall-clock gate for FSM3/FSM1 TX — frame%2 unreliable due to controlsd jitter
-    # complex fwd_hook blocks stock FSM3/FSM1 when controls_allowed && !gas_pressed,
+    # wall-clock gate for FSM3/FSM1/FSM4 TX — frame%2 unreliable due to controlsd jitter
+    # fwd_hook blocks stock FSM1/FSM3/FSM4 when controls_allowed && !gas_pressed,
     # so OP must relay them at 50Hz to prevent ECU faults.
     self.next_long_tx_nanos = 0
-    self.LONG_TX_PERIOD_NANOS = 20_000_000  # 50Hz, matching stock FSM3/FSM1
+    self.LONG_TX_PERIOD_NANOS = 20_000_000  # 50Hz, matching stock FSM3/FSM1/FSM4
+    self.vlc_counter = 0  # rolling counter for virtual lead car FSM4 byte fields
 
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
@@ -123,8 +124,9 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         self.waiting = False
         self.last_resume_frame = self.frame
 
-    # FSM3/FSM1 at 50Hz wall-clock: relay stock values so ECU doesn't fault.
-    # (complex fwd_hook blocks stock FSM3/FSM1 when controls_allowed && !gas_pressed)
+    # FSM3/FSM1/FSM4 at 50Hz wall-clock: relay stock values so ECU doesn't fault.
+    # (fwd_hook blocks stock FSM1/FSM3/FSM4 when controls_allowed && !gas_pressed)
+    # When CC.longActive: inject OP's accel and virtual lead car (FSM1+FSM4).
     # Override ACC_Check=1 during SNG resume blast so ECU acknowledges OP's CCButtons resume.
     long_tx_due = now_nanos >= self.next_long_tx_nanos
     if long_tx_due:
@@ -133,15 +135,20 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         next_tx = now_nanos + self.LONG_TX_PERIOD_NANOS
       self.next_long_tx_nanos = next_tx
 
-      accel = float(CS.stock_FSM3["ACC_AccelerationRequest"])
+      long_active = CC.longActive
+      op_accel = float(actuators.accel) if long_active else float(CS.stock_FSM3["ACC_AccelerationRequest"])
+      v_ego_ms = CS.out.vEgoRaw
+
       if self.sng_ack_frames > 0:
         acc_check = 1
         self.sng_ack_frames -= 1
       else:
         acc_check = int(CS.stock_FSM3["ACC_Check"])
 
-      can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, False))
-      can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, accel, acc_check))
+      can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, long_active, op_accel, v_ego_ms))
+      can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, op_accel, acc_check))
+      can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4, long_active, op_accel, v_ego_ms, self.vlc_counter))
+      self.vlc_counter += 1
 
     # Refresh custom ACC step every 100 frames and forward to carstate so that
     # _pending_delta emits exactly one synthetic event per physical ACC step.

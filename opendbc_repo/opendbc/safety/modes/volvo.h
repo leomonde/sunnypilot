@@ -12,6 +12,7 @@
 #define VOLVO_EUCD_FSM1          0x260  // TX by OP, ACC radar/distance message (oplong)
 #define VOLVO_EUCD_FSM2          0x262  // TX by OP, LKA command
 #define VOLVO_EUCD_FSM3          0x270  // TX by OP, ACC accel request + status
+#define VOLVO_EUCD_FSM4          0x31A  // TX by OP, ACC lead car speed (oplong)
 
 // CAN bus numbers.
 #define VOLVO_MAIN_BUS 0U
@@ -22,15 +23,16 @@ static const CanMsg VOLVO_EUCD_TX_MSGS[] = {
     {VOLVO_EUCD_CCButtons, VOLVO_MAIN_BUS, 8, .check_relay = false},
     {VOLVO_EUCD_PSCM1,     VOLVO_CAM_BUS,  8, .check_relay = true},   // OP replaces stock steering servo state
     {VOLVO_EUCD_FSM2,      VOLVO_MAIN_BUS, 8, .check_relay = true},   // OP replaces stock LKA command
-    // FSM1 / FSM3: DO NOT block forwarding. Stock cam FSM1/FSM3 carry a
-    // 5-frame rolling counter pattern the car's ECM validates; intercepting
-    // and replaying with passthrough delay causes the ECM to fault out after
-    // ~30s (observed in drive 27 seg 0). Instead we allow stock to flow
-    // cam->main untouched, and OP overlays its own FSM3 only when long-active.
-    // Car's ECM gets both on main bus interleaved; OP's later arrival
-    // dominates via last-message-wins.
+    // FSM1 / FSM3 / FSM4: DO NOT block forwarding. Stock cam messages carry a
+    // rolling counter pattern the car's ECM validates; intercepting and replaying
+    // with passthrough delay causes the ECM to fault out after ~30s (observed in
+    // drive 27 seg 0). Instead we allow stock to flow cam->main untouched, and
+    // OP overlays its own messages only when long-active.
+    // Car's ECM gets both on main bus interleaved; OP's later arrival dominates
+    // via last-message-wins.
     {VOLVO_EUCD_FSM1,      VOLVO_MAIN_BUS, 8, .check_relay = false},
     {VOLVO_EUCD_FSM3,      VOLVO_MAIN_BUS, 8, .check_relay = false},
+    {VOLVO_EUCD_FSM4,      VOLVO_MAIN_BUS, 8, .check_relay = false},
   };
 
   // TODO: add counters
@@ -121,12 +123,12 @@ static bool volvo_tx_hook(const CANPacket_t *msg) {
 }
 
 static bool volvo_fwd_hook(int bus_num, int addr) {
-  // Block stock FSM1/FSM3 from cam->main when OP is in control, so OP can
-  // relay them at 50Hz (passthrough) and override ACC_Check=1 during SNG
-  // without stock's ACC_Check=0 overwriting OP's value on the bus.
+  // Block stock FSM1/FSM3/FSM4 from cam->main when OP is in control, so OP can
+  // relay them at 50Hz (passthrough) and override ACC_Check=1 during SNG and
+  // inject virtual lead car values without stock overwriting OP's values on the bus.
   if (bus_num == VOLVO_CAM_BUS && controls_allowed && !gas_pressed) {
-    if (addr == VOLVO_EUCD_FSM1 || addr == VOLVO_EUCD_FSM3) {
-      return true;  // block forwarding; OP relays via create_radar/create_longitudinal
+    if (addr == VOLVO_EUCD_FSM1 || addr == VOLVO_EUCD_FSM3 || addr == VOLVO_EUCD_FSM4) {
+      return true;  // block forwarding; OP relays via create_radar/create_longitudinal/create_fsm4
     }
   }
   return false;
