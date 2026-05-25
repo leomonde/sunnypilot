@@ -23,13 +23,12 @@ static const CanMsg VOLVO_EUCD_TX_MSGS[] = {
     {VOLVO_EUCD_CCButtons, VOLVO_MAIN_BUS, 8, .check_relay = false},
     {VOLVO_EUCD_PSCM1,     VOLVO_CAM_BUS,  8, .check_relay = true},   // OP replaces stock steering servo state
     {VOLVO_EUCD_FSM2,      VOLVO_MAIN_BUS, 8, .check_relay = true},   // OP replaces stock LKA command
-    // FSM1 / FSM3 / FSM4: DO NOT block forwarding. Stock cam messages carry a
-    // rolling counter pattern the car's ECM validates; intercepting and replaying
-    // with passthrough delay causes the ECM to fault out after ~30s (observed in
-    // drive 27 seg 0). Instead we allow stock to flow cam->main untouched, and
-    // OP overlays its own messages only when long-active.
-    // Car's ECM gets both on main bus interleaved; OP's later arrival dominates
-    // via last-message-wins.
+    // FSM1 / FSM3 / FSM4: check_relay=false because fwd_hook blocks these messages
+    // from cam->main when controls_allowed, making OP the sole sender on the main bus.
+    // check_relay=true would cause panda to reject OP's TX (it would see the stock
+    // messages as absent). Using panda's built-in relay mechanism (check_relay=true)
+    // was avoided because its passthrough delay breaks the rolling counter the ECM
+    // validates, causing ECU faults after ~30s (observed drive 27 seg 0).
     {VOLVO_EUCD_FSM1,      VOLVO_MAIN_BUS, 8, .check_relay = false},
     {VOLVO_EUCD_FSM3,      VOLVO_MAIN_BUS, 8, .check_relay = false},
     {VOLVO_EUCD_FSM4,      VOLVO_MAIN_BUS, 8, .check_relay = false},
