@@ -103,6 +103,18 @@ static bool volvo_tx_hook(const CANPacket_t *msg) {
     }
   }
 
+  // FSM1 / FSM4 relay gate: only TX when controls_allowed.
+  // Bug: when !controls_allowed, fwd_hook passes stock FSM1/FSM4 cam->main
+  // (forwarding is not blocked). OP's relay would land on main bus too,
+  // creating two CAN senders for the same ID with different rolling counters
+  // (FSM4 Byte_2/Byte_6, FSM1 TargetState byte). The resulting CAN bit errors
+  // make the camera abort ACC activation after ~100ms (observed drives 5bf/5c0).
+  if (msg->addr == VOLVO_EUCD_FSM1 || msg->addr == VOLVO_EUCD_FSM4) {
+    if (!controls_allowed) {
+      violation = true;
+    }
+  }
+
   // Longitudinal control: gate on controls_allowed + range check.
   // With FSM3 check_relay=false, stock flows cam->main uninterrupted.
   // OP only TXs FSM3 when actively controlling long (CC.longActive), so
@@ -127,9 +139,21 @@ static bool volvo_fwd_hook(int bus_num, int addr) {
   // inject virtual lead car values without stock overwriting OP's values on the bus.
   if (bus_num == VOLVO_CAM_BUS && controls_allowed && !gas_pressed) {
     if (addr == VOLVO_EUCD_FSM1 || addr == VOLVO_EUCD_FSM3 || addr == VOLVO_EUCD_FSM4) {
-      return true;  // block forwarding; OP relays via create_radar/create_longitudinal/create_fsm4
+      return true;  // block cam->main; OP relays via create_radar/create_longitudinal/create_fsm4
     }
   }
+
+  // Block OP's FSM1/FSM3/FSM4 from being echoed back to the cam bus via the
+  // main->cam forwarding path. When OP injects VLC values that differ from what
+  // the camera sent (different distance, accel, counters), the camera sees its
+  // own messages "replaced" on the bus and disengages ACC after ~24s as a
+  // CAN-conflict safety measure (observed drive 5c6 seg1).
+  if (bus_num == VOLVO_MAIN_BUS && controls_allowed) {
+    if (addr == VOLVO_EUCD_FSM1 || addr == VOLVO_EUCD_FSM3 || addr == VOLVO_EUCD_FSM4) {
+      return true;  // block main->cam echo of OP's overrides
+    }
+  }
+
   return false;
 }
 
