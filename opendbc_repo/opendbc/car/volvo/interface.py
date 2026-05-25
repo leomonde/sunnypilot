@@ -36,6 +36,7 @@ class CarInterface(CarInterfaceBase):
     ret.steerActuatorDelay = 0.2
     ret.steerLimitTimer = 0.8
 
+    ret.alphaLongitudinalAvailable = True
     ret.openpilotLongitudinalControl = alpha_long
     ret.pcmCruise = not ret.openpilotLongitudinalControl
 
