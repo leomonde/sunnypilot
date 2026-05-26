@@ -38,7 +38,7 @@ class CarInterface(CarInterfaceBase):
 
     ret.alphaLongitudinalAvailable = True
     ret.openpilotLongitudinalControl = alpha_long
-    ret.pcmCruise = not ret.openpilotLongitudinalControl
+    ret.pcmCruise = True  # VLC requer ACC nativo ativo; nunca cancelar pelo pcmCruise
 
     return ret
 
