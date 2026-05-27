@@ -57,6 +57,7 @@ def create_lka_msg(packer, apply_steer: float, steer_direction: int):
 
 def create_longitudinal(packer, stock_fsm3, accel, acc_check):
   # pass stock FSM3 verbatim except ACC_AccelerationRequest and ACC_Check; bit flip faults ECU (drive 27)
+  # ACC_FaultFlag (bit 5 of former byte 7) is forced to 0 — OP must never signal fault itself.
   values = {s: stock_fsm3[s] for s in (
     "ACC_Standstill",
     "Byte_01",
@@ -66,11 +67,11 @@ def create_longitudinal(packer, stock_fsm3, accel, acc_check):
     "Byte_4",
     "Byte_5",
     "Byte_6",
-    "Byte_7",
   )}
   values |= {
     "ACC_AccelerationRequest": accel,
     "ACC_Check": acc_check,
+    "ACC_FaultFlag": 0,
   }
   return packer.make_can_msg("FSM3", 0, values)
 
@@ -136,14 +137,14 @@ def create_radar(packer, stock_fsm1, long_active: bool, accel: float = 0.0, v_eg
   # B2 (ACC_TargetState) must follow the stock 5-frame header/data cycle:
   #   data frame (4 of 5): B2 = 184 mild / 188 strong (bit2 = strong flag)
   #   header frame (1 of 5): B2 = 0   mild / 4   strong (bit2 = strong flag)
-  # We detect the header frame from stock's B4 (=0 in header, =73 in data),
+  # We detect the header frame from stock's ACC_FrameType (=0 in header, =73 in data),
   # avoiding the need to track the camera's internal counter.
-  # Byte_3..7 are passthrough from stock — preserves the header/data cycle for B4/B6.
+  # Byte_3..7 are passthrough from stock — preserves the header/data cycle.
   if long_active:
     _, distance = _vlc_speed_distance(accel, v_ego_ms)
     strong_bit = 4 if accel < _VLC_STRONG_THRESHOLD else 0
-    # stock_fsm1["Byte_4"] == 0 marks header frame in stock cycle
-    is_header = stock_fsm1["Byte_4"] == 0
+    # stock_fsm1["ACC_FrameType"] == 0 marks header frame in stock cycle
+    is_header = stock_fsm1["ACC_FrameType"] == 0
     base_target = 0 if is_header else 184
     values = {
       "ACC_Distance":    distance,
@@ -157,37 +158,36 @@ def create_radar(packer, stock_fsm1, long_active: bool, accel: float = 0.0, v_eg
       "ACC_TargetState": stock_fsm1["ACC_TargetState"],
     }
 
-  values |= {s: stock_fsm1[s] for s in ("Byte_3", "Byte_4", "Byte_5", "Byte_6", "Byte_7")}
+  values |= {s: stock_fsm1[s] for s in ("Byte_3", "ACC_FrameType", "Byte_5", "Byte_6", "Byte_7")}
   return packer.make_can_msg("FSM1", 0, values)
 
 
 def create_fsm4(packer, stock_fsm4, long_active: bool, accel: float = 0.0, v_ego_ms: float = 0.0, counter: int = 0):
   # FSM4 when long_active: all bytes synthesized from stock-reverse-engineered rules.
-  #   B0: 9-9-12 frame runs alternating 0x55/0xAA (was: toggle every frame, 50% match)
-  #   B1: 0xF9 when standstill + strong braking, else 0xF1
-  #   B2: linear regression with LeadSpeed (was: counter%16, 2.8% match)
-  #   B3: ACC_LeadSpeed from regression (unchanged, MAE ~3.4 km/h)
-  #   B4: 0x8B fixed (143 ocasional ignored, 97% match)
-  #   B5: 7-level scale by (accel, v_ego) (was: 2 levels, 28% match)
-  #   B6: PASSTHROUGH from stock — stock emits 256 unique values, likely
-  #       checksum/CRC/rolling-code from internal radar. Replicating would
-  #       require firmware-level understanding. Passthrough is safest.
-  #   B7: 0 fixed (100% match)
+  #   Radar_Heartbeat       (B0): 9-9-12 frame runs alternating 0x55/0xAA (was toggle, 50% match)
+  #   Radar_StatusFlag      (B1): 0xF9 when standstill + strong braking, else 0xF1
+  #   Radar_LeadVelocityAlt (B2): linear regression with LeadSpeed (was counter%16, 2.8% match)
+  #   ACC_LeadSpeed         (B3): from regression (unchanged, MAE ~3.4 km/h)
+  #   Byte_4                (B4): 0x8B fixed (143 ocasional ignored, 97% match)
+  #   Radar_BrakingMode     (B5): 7-level scale by (accel, v_ego) (was 2 levels, 28% match)
+  #   Radar_CRC             (B6): PASSTHROUGH — stock emits 256 unique values; likely
+  #                               checksum/rolling-code from internal radar firmware.
+  #   Byte_7                (B7): 0 fixed (100% match)
   if long_active:
     lead_speed, _ = _vlc_speed_distance(accel, v_ego_ms)
     values = {
-      "Byte_0":        _vlc_fsm4_byte0(counter),
-      "Byte_1":        0xF9 if (v_ego_ms < 1.0 and accel < -0.5) else 0xF1,
-      "Byte_2":        max(0, min(255, int(round(0.977 * lead_speed + 0.752)))),
-      "ACC_LeadSpeed": lead_speed,
-      "Byte_4":        0x8B,
-      "Byte_5":        _vlc_fsm4_byte5(accel, v_ego_ms),
-      "Byte_6":        stock_fsm4["Byte_6"],
-      "Byte_7":        0,
+      "Radar_Heartbeat":       _vlc_fsm4_byte0(counter),
+      "Radar_StatusFlag":      0xF9 if (v_ego_ms < 1.0 and accel < -0.5) else 0xF1,
+      "Radar_LeadVelocityAlt": max(0, min(255, int(round(0.977 * lead_speed + 0.752)))),
+      "ACC_LeadSpeed":         lead_speed,
+      "Byte_4":                0x8B,
+      "Radar_BrakingMode":     _vlc_fsm4_byte5(accel, v_ego_ms),
+      "Radar_CRC":             stock_fsm4["Radar_CRC"],
+      "Byte_7":                0,
     }
   else:
     values = {s: stock_fsm4[s] for s in (
-      "Byte_0", "Byte_1", "Byte_2", "ACC_LeadSpeed",
-      "Byte_4", "Byte_5", "Byte_6", "Byte_7",
+      "Radar_Heartbeat", "Radar_StatusFlag", "Radar_LeadVelocityAlt", "ACC_LeadSpeed",
+      "Byte_4", "Radar_BrakingMode", "Radar_CRC", "Byte_7",
     )}
   return packer.make_can_msg("FSM4", 0, values)

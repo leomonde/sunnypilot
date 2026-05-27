@@ -140,7 +140,7 @@ BO_ 608 FSM1: 8 FSM
  SG_ ACC_LeadConf : 15|8@0+ (1,0) [0|255] "" XXX
  SG_ ACC_TargetState : 23|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_3 : 31|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
+ SG_ ACC_FrameType : 39|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_7 : 63|8@0+ (1,0) [0|255] "" XXX
@@ -174,7 +174,7 @@ BO_ 624 FSM3: 8 FSM
  SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_7 : 63|8@0+ (1,0) [0|255] "" XXX
+ SG_ ACC_FaultFlag : 61|1@0+ (1,0) [0|1] "" XXX
 
 BO_ 648 BrakePedal: 8 XXX
  SG_ Counter : 0|3@1+ (1,0) [0|6] "" XXX
@@ -185,13 +185,13 @@ BO_ 750 HandBrake: 8 XXX
  SG_ Hand_Brake_State : 44|4@0+ (1,0) [0|15] "" XXX
 
 BO_ 794 FSM4: 8 FSM
- SG_ Byte_0 : 7|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_1 : 15|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_2 : 23|8@0+ (1,0) [0|255] "" XXX
+ SG_ Radar_Heartbeat : 7|8@0+ (1,0) [0|255] "" XXX
+ SG_ Radar_StatusFlag : 15|8@0+ (1,0) [0|255] "" XXX
+ SG_ Radar_LeadVelocityAlt : 23|8@0+ (1,0) [0|255] "" XXX
  SG_ ACC_LeadSpeed : 31|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_4 : 39|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_5 : 47|8@0+ (1,0) [0|255] "" XXX
- SG_ Byte_6 : 55|8@0+ (1,0) [0|255] "" XXX
+ SG_ Radar_BrakingMode : 47|8@0+ (1,0) [0|255] "" XXX
+ SG_ Radar_CRC : 55|8@0+ (1,0) [0|255] "" XXX
  SG_ Byte_7 : 63|8@0+ (1,0) [0|255] "" XXX
 
 BO_ 802 StartStop: 8 XXX

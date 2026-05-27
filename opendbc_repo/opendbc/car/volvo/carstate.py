@@ -57,7 +57,11 @@ class CarState(CarStateBase):
     # standstill hold; SNG uses this to time the resume blast (hard-cancel without it, drive 38)
     ret.cruiseState.standstill = bool(cam_cp.vl["FSM3"]["ACC_Standstill"])
     ret.cruiseState.nonAdaptive = False
-    ret.accFaulted = False
+    # ACC_FaultFlag = bit 5 of FSM3 byte 7. Stock never sets this (0 in 30k frames of normal
+    # operation); only appears after ECM rejects ACC and enters permanent fault state.
+    # Reliable explicit fault signal — once set, persists until ignition cycle.
+    self.acc_fault_flag = bool(cam_cp.vl["FSM3"]["ACC_FaultFlag"])
+    ret.accFaulted = self.acc_fault_flag
     self.acc_distance = cam_cp.vl["FSM1"]["ACC_Distance"]
 
     # Check if servo stops responding when ACC is active
