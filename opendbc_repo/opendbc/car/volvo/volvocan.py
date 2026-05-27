@@ -114,24 +114,47 @@ def _vlc_fsm4_byte0(counter: int) -> int:
 
 
 def _vlc_fsm4_byte5(accel: float, v_ego_ms: float) -> int:
-  """FSM4 B5: 7-level scale (high nibble = severity, low nibble = sub-mode).
-  Observed in stock: 0xB3 leve frenagem, 0xB4 dominante neutro/positivo, 0xB5 accel forte
-  baixa vel; 0xF1 frenagem forte alta vel, 0xF2 moderada, 0xF3 leve, 0xF4 transição.
+  """FSM4 B5 (Radar_BrakingMode): 7-level scale by (accel, v_ego).
+
+  Observed stock pattern: high nibble F (0xF*) signals "hydraulic brake imminent/active"
+  and only appears in LOW velocity or with VERY strong braking. Sending 0xF3 in high vel
+  with moderate braking (e.g. -0.36 m/s² at 65 km/h) caused ECM to cancel ACC (rota
+  000005cd--465a34c797 seg 4, t=47.687s pcmDisable).
+
+  Per-bucket stock observation (000005ca real lead, 28k samples):
+    0xF1 (241): accel mean=-2.53, vEgo>42 km/h     → strong braking, qualquer vel
+    0xF2 (242): accel mean=-1.35, vEgo<22 km/h     → moderada, baixa-média vel
+    0xF3 (243): accel mean=-0.51, vEgo<12 km/h     → leve frenagem, BAIXA vel apenas
+    0xF4 (244): accel mean=+0.11, vEgo<10 km/h     → transição baixa vel
+    0xB3 (179): accel mean=-0.14, qualquer vel     → leve frenagem cruise mode
+    0xB4 (180): accel mean=+0.14, qualquer vel     → DOMINANTE (cruise neutro/positivo)
+    0xB5 (181): accel mean=+0.50, vEgo<14 km/h     → acel forte baixa vel
   """
+  v_kmh = v_ego_ms * 3.6
+
+  # Strong braking (high nibble F = hydraulic brake): only in observed conditions
   if accel < -2.0:
-    return 0xF1
-  if accel < -1.0:
-    return 0xF2
-  if accel < _VLC_STRONG_THRESHOLD:
-    return 0xF3
-  if accel > 0.4 and v_ego_ms < 4.0:
-    return 0xB5
+    return 0xF1                                # very strong, any speed
+  if v_kmh < 20.0 and accel < -1.0:
+    return 0xF2                                # moderate, low-medium speed
+  if v_kmh < 15.0:
+    # Low-speed scale: full F/B range available
+    if accel > 0.4:
+      return 0xB5                              # strong accel
+    if accel < _VLC_STRONG_THRESHOLD:
+      return 0xF3                              # light braking
+    if accel >= -0.05:
+      return 0xF4                              # transition (rare in stock)
+    return 0xB3                                # light braking, cruise mode
+
+  # High speed (≥15 km/h): only cruise modes (high nibble B) to avoid ECM rejection
   if accel >= -0.05:
-    return 0xB4
-  return 0xB3
+    return 0xB4                                # cruise neutral/positive (dominant)
+  return 0xB3                                  # light braking cruise mode
 
 
-def create_radar(packer, stock_fsm1, long_active: bool, accel: float = 0.0, v_ego_ms: float = 0.0):
+def create_radar(packer, stock_fsm1, long_active: bool, accel: float = 0.0,
+                 v_ego_ms: float = 0.0, strong_braking: bool = False):
   # When long_active: replace ACC_Distance, ACC_LeadConf, ACC_TargetState with
   # virtual lead car values so the car's ACC accepts the desired deceleration.
   # B2 (ACC_TargetState) must follow the stock 5-frame header/data cycle:
@@ -139,10 +162,11 @@ def create_radar(packer, stock_fsm1, long_active: bool, accel: float = 0.0, v_eg
   #   header frame (1 of 5): B2 = 0   mild / 4   strong (bit2 = strong flag)
   # We detect the header frame from stock's ACC_FrameType (=0 in header, =73 in data),
   # avoiding the need to track the camera's internal counter.
+  # `strong_braking` comes from CarController with hysteresis to avoid bit-2 flicker.
   # Byte_3..7 are passthrough from stock — preserves the header/data cycle.
   if long_active:
     _, distance = _vlc_speed_distance(accel, v_ego_ms)
-    strong_bit = 4 if accel < _VLC_STRONG_THRESHOLD else 0
+    strong_bit = 4 if strong_braking else 0
     # stock_fsm1["ACC_FrameType"] == 0 marks header frame in stock cycle
     is_header = stock_fsm1["ACC_FrameType"] == 0
     base_target = 0 if is_header else 184
@@ -162,22 +186,24 @@ def create_radar(packer, stock_fsm1, long_active: bool, accel: float = 0.0, v_eg
   return packer.make_can_msg("FSM1", 0, values)
 
 
-def create_fsm4(packer, stock_fsm4, long_active: bool, accel: float = 0.0, v_ego_ms: float = 0.0, counter: int = 0):
+def create_fsm4(packer, stock_fsm4, long_active: bool, accel: float = 0.0, v_ego_ms: float = 0.0,
+                counter: int = 0, strong_braking: bool = False):
   # FSM4 when long_active: all bytes synthesized from stock-reverse-engineered rules.
   #   Radar_Heartbeat       (B0): 9-9-12 frame runs alternating 0x55/0xAA (was toggle, 50% match)
   #   Radar_StatusFlag      (B1): 0xF9 when standstill + strong braking, else 0xF1
   #   Radar_LeadVelocityAlt (B2): linear regression with LeadSpeed (was counter%16, 2.8% match)
   #   ACC_LeadSpeed         (B3): from regression (unchanged, MAE ~3.4 km/h)
   #   Byte_4                (B4): 0x8B fixed (143 ocasional ignored, 97% match)
-  #   Radar_BrakingMode     (B5): 7-level scale by (accel, v_ego) (was 2 levels, 28% match)
+  #   Radar_BrakingMode     (B5): speed-aware 7-level scale (see _vlc_fsm4_byte5)
   #   Radar_CRC             (B6): PASSTHROUGH — stock emits 256 unique values; likely
   #                               checksum/rolling-code from internal radar firmware.
   #   Byte_7                (B7): 0 fixed (100% match)
+  # `strong_braking` from CarController (with hysteresis) gates the StatusFlag standstill mark.
   if long_active:
     lead_speed, _ = _vlc_speed_distance(accel, v_ego_ms)
     values = {
       "Radar_Heartbeat":       _vlc_fsm4_byte0(counter),
-      "Radar_StatusFlag":      0xF9 if (v_ego_ms < 1.0 and accel < -0.5) else 0xF1,
+      "Radar_StatusFlag":      0xF9 if (v_ego_ms < 1.0 and strong_braking) else 0xF1,
       "Radar_LeadVelocityAlt": max(0, min(255, int(round(0.977 * lead_speed + 0.752)))),
       "ACC_LeadSpeed":         lead_speed,
       "Byte_4":                0x8B,

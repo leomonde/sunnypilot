@@ -40,12 +40,22 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     # OP's CCButtons resume unless FSM3 confirms it. Force 25 frames (~0.5s).
     self.sng_ack_frames = 0
 
-    # wall-clock gate for FSM3/FSM1/FSM4 TX — frame%2 unreliable due to controlsd jitter
-    # fwd_hook blocks stock FSM1/FSM3/FSM4 when controls_allowed && !gas_pressed,
-    # so OP must relay them at 50Hz to prevent ECU faults.
+    # wall-clock gate for FSM3/FSM1/FSM4 TX — frame%2 unreliable due to controlsd jitter.
+    # fwd_hook blocks stock FSM1/FSM3/FSM4 from cam→main when controls_allowed && !gas_pressed,
+    # so OP must relay them itself to prevent ECU faults.
+    # Stock TX frequencies (measured on 000005ca seg 6, 60s): FSM1=50Hz, FSM3=50Hz, FSM4=33Hz.
+    # Sending FSM4 at 50Hz causes the rolling Heartbeat (Byte_0, 9-9-12 frame runs) to
+    # advance 50% faster than the ECM expects, likely causing the post-7s pcmDisable
+    # observed in 000005cd--465a34c797 seg 4.
     self.next_long_tx_nanos = 0
-    self.LONG_TX_PERIOD_NANOS = 20_000_000  # 50Hz, matching stock FSM3/FSM1/FSM4
-    self.vlc_counter = 0  # rolling counter for virtual lead car FSM4 byte fields
+    self.next_fsm4_tx_nanos = 0
+    self.LONG_TX_PERIOD_NANOS = 20_000_000  # 50Hz, matching stock FSM3/FSM1
+    self.FSM4_TX_PERIOD_NANOS = 30_000_000  # 33Hz, matching stock FSM4 cadence
+    self.vlc_counter = 0  # rolling counter for virtual lead car FSM4 byte fields (incremented per FSM4 TX)
+
+    # Hysteresis for "strong braking" flag (FSM1 ACC_TargetState bit 2 and FSM4 BrakingMode).
+    # Avoids rapid flips around accel ≈ -0.32 m/s² that confuse the ECM.
+    self.strong_braking = False
 
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
@@ -124,22 +134,37 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         self.waiting = False
         self.last_resume_frame = self.frame
 
-    # FSM3/FSM1/FSM4 at 50Hz wall-clock: relay stock values so ECU doesn't fault.
+    # FSM3/FSM1 at 50Hz and FSM4 at 33Hz wall-clock: relay stock values so ECU doesn't fault.
     # (fwd_hook blocks stock FSM1/FSM3/FSM4 when controls_allowed && !gas_pressed)
-    # When CC.longActive: inject OP's accel and virtual lead car (FSM1+FSM4).
+    # When OP controls long: inject OP's accel and virtual lead car (FSM1+FSM4).
     # Override ACC_Check=1 during SNG resume blast so ECU acknowledges OP's CCButtons resume.
     long_tx_due = now_nanos >= self.next_long_tx_nanos
+    fsm4_tx_due = now_nanos >= self.next_fsm4_tx_nanos
+    if long_tx_due or fsm4_tx_due:
+      v_ego_ms = CS.out.vEgoRaw
+      # CC.longActive alone is not enough: with pcmCruise=True, controlsd sets longActive
+      # whenever cruise is enabled (ACC nativo ativo), regardless of who controls long.
+      # CP.openpilotLongitudinalControl is the user toggle ("alpha longitudinal").
+      # When False (oplong off + ICBM/SLA only), OP must NOT inject VLC — pure passthrough.
+      op_controls_long = self.CP.openpilotLongitudinalControl and CC.longActive
+      # Below 30 km/h relay the real lead car from the stock FSM so SNG / low-speed
+      # following uses the actual camera data (or no lead if nothing is in front).
+      vlc_active = op_controls_long and v_ego_ms >= (30.0 / 3.6)
+      op_accel = float(actuators.accel) if op_controls_long else float(CS.stock_FSM3["ACC_AccelerationRequest"])
+
+      # Hysteresis on strong-braking flag (FSM1 ACC_TargetState bit 2, FSM4 BrakingMode).
+      # Enter at -0.40 m/s², exit at -0.20 m/s² — avoids ECM seeing rapid flips around -0.32.
+      if self.strong_braking:
+        self.strong_braking = op_accel < -0.20
+      else:
+        self.strong_braking = op_accel < -0.40
+
+    # 50Hz block — FSM1 + FSM3
     if long_tx_due:
       next_tx = self.next_long_tx_nanos + self.LONG_TX_PERIOD_NANOS
       if self.next_long_tx_nanos == 0 or next_tx <= now_nanos:
         next_tx = now_nanos + self.LONG_TX_PERIOD_NANOS
       self.next_long_tx_nanos = next_tx
-
-      v_ego_ms = CS.out.vEgoRaw
-      # Below 30 km/h relay the real lead car from the stock FSM so SNG / low-speed
-      # following uses the actual camera data (or no lead if nothing is in front).
-      vlc_active = CC.longActive and v_ego_ms >= (30.0 / 3.6)
-      op_accel = float(actuators.accel) if CC.longActive else float(CS.stock_FSM3["ACC_AccelerationRequest"])
 
       if self.sng_ack_frames > 0:
         acc_check = 1
@@ -147,9 +172,18 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       else:
         acc_check = int(CS.stock_FSM3["ACC_Check"])
 
-      can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, vlc_active, op_accel, v_ego_ms))
+      can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, vlc_active, op_accel, v_ego_ms, self.strong_braking))
       can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, op_accel, acc_check))
-      can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4, vlc_active, op_accel, v_ego_ms, self.vlc_counter))
+
+    # 33Hz block — FSM4 (matches stock cam rate; counter advances per-FSM4-tick so
+    # Heartbeat 9-9-12 cycle has correct wall-clock duration)
+    if fsm4_tx_due:
+      next_fsm4 = self.next_fsm4_tx_nanos + self.FSM4_TX_PERIOD_NANOS
+      if self.next_fsm4_tx_nanos == 0 or next_fsm4 <= now_nanos:
+        next_fsm4 = now_nanos + self.FSM4_TX_PERIOD_NANOS
+      self.next_fsm4_tx_nanos = next_fsm4
+
+      can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4, vlc_active, op_accel, v_ego_ms, self.vlc_counter, self.strong_braking))
       self.vlc_counter += 1
 
     # Refresh custom ACC step every 100 frames and forward to carstate so that
