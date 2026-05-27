@@ -114,43 +114,33 @@ def _vlc_fsm4_byte0(counter: int) -> int:
 
 
 def _vlc_fsm4_byte5(accel: float, v_ego_ms: float) -> int:
-  """FSM4 B5 (Radar_BrakingMode): 7-level scale by (accel, v_ego).
+  """FSM4 B5 (Radar_BrakingMode): stock-observed rule, accel-only.
 
-  Observed stock pattern: high nibble F (0xF*) signals "hydraulic brake imminent/active"
-  and only appears in LOW velocity or with VERY strong braking. Sending 0xF3 in high vel
-  with moderate braking (e.g. -0.36 m/s² at 65 km/h) caused ECM to cancel ACC (rota
-  000005cd--465a34c797 seg 4, t=47.687s pcmDisable).
+  Validated against 46k stock samples (real lead 000005ca + stock-long 000005cf seg 1-3,
+  vEgo 0-111 km/h). Previous version had a velocity guard that emitted 0xB3 for
+  accel=-1.40 at 108 km/h (combination never seen in stock), causing ECM to fault
+  the ACC in route 000005d5--c6d70b04fe seg 0 (t=33.355s).
 
-  Per-bucket stock observation (000005ca real lead, 28k samples):
-    0xF1 (241): accel mean=-2.53, vEgo>42 km/h     → strong braking, qualquer vel
-    0xF2 (242): accel mean=-1.35, vEgo<22 km/h     → moderada, baixa-média vel
-    0xF3 (243): accel mean=-0.51, vEgo<12 km/h     → leve frenagem, BAIXA vel apenas
-    0xF4 (244): accel mean=+0.11, vEgo<10 km/h     → transição baixa vel
-    0xB3 (179): accel mean=-0.14, qualquer vel     → leve frenagem cruise mode
-    0xB4 (180): accel mean=+0.14, qualquer vel     → DOMINANTE (cruise neutro/positivo)
-    0xB5 (181): accel mean=+0.50, vEgo<14 km/h     → acel forte baixa vel
+  Stock-observed mapping by accel (any speed up to 111 km/h):
+    0xF1  (very strong): accel < -2.0    (stock: -2.88 to -2.08, 246 samples)
+    0xF3  (hydraulic):   -2.0 ≤ accel < -0.5  (stock: -1.44 to -0.08, 5840 samples,
+                                                covers any vEgo observed)
+    0xB3  (light cruise braking): -0.5 ≤ accel < -0.05
+    0xB4  (cruise neutral/+):     accel >= -0.05   (DOMINANT in stock)
+
+  Omitted (stock uses rarely, narrow conditions; OP stays within "safe subset"):
+    0xF2  (1.7% of stock): use 0xF3 instead — covers same ranges
+    0xF4, 0xB5 (~3% combined): edge cases, 0xB3/0xB4 cover the relevant ranges
+
+  v_ego_ms kept in signature for compatibility / future refinements.
   """
-  v_kmh = v_ego_ms * 3.6
-
-  # Strong braking (high nibble F = hydraulic brake): only in observed conditions
   if accel < -2.0:
-    return 0xF1                                # very strong, any speed
-  if v_kmh < 20.0 and accel < -1.0:
-    return 0xF2                                # moderate, low-medium speed
-  if v_kmh < 15.0:
-    # Low-speed scale: full F/B range available
-    if accel > 0.4:
-      return 0xB5                              # strong accel
-    if accel < _VLC_STRONG_THRESHOLD:
-      return 0xF3                              # light braking
-    if accel >= -0.05:
-      return 0xF4                              # transition (rare in stock)
-    return 0xB3                                # light braking, cruise mode
-
-  # High speed (≥15 km/h): only cruise modes (high nibble B) to avoid ECM rejection
-  if accel >= -0.05:
-    return 0xB4                                # cruise neutral/positive (dominant)
-  return 0xB3                                  # light braking cruise mode
+    return 0xF1
+  if accel < -0.5:
+    return 0xF3
+  if accel < -0.05:
+    return 0xB3
+  return 0xB4
 
 
 def create_radar(packer, stock_fsm1, long_active: bool, accel: float = 0.0,
