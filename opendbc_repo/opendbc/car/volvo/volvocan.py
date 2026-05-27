@@ -179,12 +179,15 @@ def create_radar(packer, stock_fsm1, long_active: bool, accel: float = 0.0,
 def create_fsm4(packer, stock_fsm4, long_active: bool, accel: float = 0.0, v_ego_ms: float = 0.0,
                 counter: int = 0, strong_braking: bool = False):
   # FSM4 when long_active: all bytes synthesized from stock-reverse-engineered rules.
-  #   Radar_Heartbeat       (B0): 9-9-12 frame runs alternating 0x55/0xAA (was toggle, 50% match)
+  #   Radar_Heartbeat       (B0): PASSTHROUGH from stock — ECM checks cadence; OP-generated
+  #                               9-9-12 cycle drifted out of sync (47% match with stock in
+  #                               000005d5 vs 100% in real lead passthrough) likely
+  #                               contributing to ECM fault. counter param kept for API stability.
   #   Radar_StatusFlag      (B1): 0xF9 when standstill + strong braking, else 0xF1
   #   Radar_LeadVelocityAlt (B2): linear regression with LeadSpeed (was counter%16, 2.8% match)
   #   ACC_LeadSpeed         (B3): from regression (unchanged, MAE ~3.4 km/h)
   #   Byte_4                (B4): 0x8B fixed (143 ocasional ignored, 97% match)
-  #   Radar_BrakingMode     (B5): speed-aware 7-level scale (see _vlc_fsm4_byte5)
+  #   Radar_BrakingMode     (B5): accel-only scale (see _vlc_fsm4_byte5)
   #   Radar_CRC             (B6): PASSTHROUGH — stock emits 256 unique values; likely
   #                               checksum/rolling-code from internal radar firmware.
   #   Byte_7                (B7): 0 fixed (100% match)
@@ -192,7 +195,7 @@ def create_fsm4(packer, stock_fsm4, long_active: bool, accel: float = 0.0, v_ego
   if long_active:
     lead_speed, _ = _vlc_speed_distance(accel, v_ego_ms)
     values = {
-      "Radar_Heartbeat":       _vlc_fsm4_byte0(counter),
+      "Radar_Heartbeat":       stock_fsm4["Radar_Heartbeat"],
       "Radar_StatusFlag":      0xF9 if (v_ego_ms < 1.0 and strong_braking) else 0xF1,
       "Radar_LeadVelocityAlt": max(0, min(255, int(round(0.977 * lead_speed + 0.752)))),
       "ACC_LeadSpeed":         lead_speed,
