@@ -77,40 +77,85 @@ def create_longitudinal(packer, stock_fsm3, accel, acc_check):
 
 
 # ── Virtual Lead Car (VLC) ────────────────────────────────────────────────────
-# Reverse-engineered from V60 stock camera (route 000005ca, 28k lead-active samples).
-# Linear regression for kinematic values:
-#   lead_speed_kmh = A_LS * v_ego_ms + B_LS * accel_mss + C_LS  (R²=0.945)
-#   distance_m     = A_D  * v_ego_ms + B_D  * accel_mss + C_D   (R²=0.523)
-_VLC_A_LS, _VLC_B_LS, _VLC_C_LS = 3.141, 2.667, 3.835
-_VLC_A_D,  _VLC_B_D,  _VLC_C_D  = 1.621, 4.002, -1.097
+# Stateful lead simulation with physically-plausible motion.
+# The ECM authorizes hydraulic braking when it "sees" a close lead car. The OP
+# manipulates lead distance + speed to justify the AccelRequest it commands.
+# Movement is rate-limited so distance/speed evolve plausibly between frames,
+# avoiding the "lead teleporting" pattern that caused ECM faults in earlier
+# attempts (e.g. 000005d5 seg 0: VLC distance jumped from 255→17m on activation).
+#
+# Targets per accel bucket — derived from stock observation (34k samples with
+# real lead, 000005ca + 000005cf):
+#
+#   accel range          headway   min_dist  gap_kmh (lead slower than ego)
+#   ≥ 0      (cruise)    cruise:   dist=80m, lead = ego + 2 km/h (afastando levemente)
+#   -0.3..0  (very mild) 2.0 s     20 m      3
+#   -0.5..-0.3 (mild)    1.5 s     12 m      6
+#   -1.0..-0.5 (moderate) 1.2 s    10 m      10
+#   -1.5..-1.0 (strong)  1.0 s      8 m      15
+#   < -1.5   (very strong) 0.8 s   12 m      25
 
-# Strong-braking threshold for ACC_TargetState bit-2 (188 vs 184) and FSM4 B5.
-# Observed transition point in stock data: 50% strong at accel ≈ -0.32 m/s².
-_VLC_STRONG_THRESHOLD = -0.32
+_VLC_LEAD_CONF = 255          # stock emits 243-255 (255 dominant ~69%)
+_VLC_CRUISE_DIST = 80.0       # cruise: lead distante (stock p90=84m)
+_VLC_CRUISE_LEAD_OFFSET = 2.0 # km/h above ego in cruise (slight opening)
 
-# ACC_LeadConf: stock emits 243-255 (255 dominant ~69%). 240 is out of range.
-_VLC_LEAD_CONF = 255
-
-# FSM4 Byte_0 cycle: stock runs 9-9-12 frames alternating 0x55/0xAA (period 60).
-# Phase boundaries (cumulative): 9, 18, 30, 39, 48, 60
-# Compare to old toggle-per-frame which gives 50% match only.
-_VLC_B0_BOUNDARIES = (9, 18, 30, 39, 48, 60)
+# Physical motion limits (per second)
+_VLC_MAX_CLOSE_RATE = 20.0   # m/s — lead approaching (= 72 km/h relative)
+_VLC_MAX_OPEN_RATE  = 10.0   # m/s — lead moving away  (= 36 km/h relative)
+_VLC_MAX_LEAD_ACCEL_KMH = 10.8  # km/h per second (= 3 m/s²)
 
 
-def _vlc_speed_distance(accel: float, v_ego_ms: float) -> tuple[int, int]:
-  """Lead speed (km/h) and distance (m) for virtual lead car."""
-  lead_speed = int(round(max(0.0, min(250.0, _VLC_A_LS * v_ego_ms + _VLC_B_LS * accel + _VLC_C_LS))))
-  distance   = int(round(max(3.0,  min(120.0, _VLC_A_D  * v_ego_ms + _VLC_B_D  * accel + _VLC_C_D))))
-  return lead_speed, distance
+class VLCState:
+  """Stateful virtual lead car. Updated once per FSM4 TX (33Hz)."""
+  def __init__(self):
+    self.distance = _VLC_CRUISE_DIST     # m, init: distant (cruise)
+    self.lead_kmh = 0.0                  # km/h, will sync to ego on first update
+    self.initialized = False
 
+  def reset(self):
+    """Call when entering VLC mode after being inactive."""
+    self.distance = _VLC_CRUISE_DIST
+    self.initialized = False
 
-def _vlc_fsm4_byte0(counter: int) -> int:
-  """FSM4 B0: 9-9-12 frame runs alternating 0x55/0xAA (period 60). Matches stock cadence."""
-  phase = counter % 60
-  for i, boundary in enumerate(_VLC_B0_BOUNDARIES):
-    if phase < boundary:
-      return 0x55 if (i % 2 == 0) else 0xAA
-  return 0x55  # unreachable
+  def update(self, accel: float, v_ego_ms: float, dt: float = 0.030):
+    """Advance state one step; returns (distance_int, lead_speed_kmh_int)."""
+    v_ego_kmh = v_ego_ms * 3.6
+    if not self.initialized:
+      self.lead_kmh = v_ego_kmh + _VLC_CRUISE_LEAD_OFFSET
+      self.initialized = True
+
+    # Target based on accel bucket (stock-observed values)
+    if accel >= 0:
+      target_dist = _VLC_CRUISE_DIST
+      target_lead = v_ego_kmh + _VLC_CRUISE_LEAD_OFFSET
+    else:
+      if accel >= -0.3:
+        headway, min_d, gap = 2.0, 20.0, 3.0
+      elif accel >= -0.5:
+        headway, min_d, gap = 1.5, 12.0, 6.0
+      elif accel >= -1.0:
+        headway, min_d, gap = 1.2, 10.0, 10.0
+      elif accel >= -1.5:
+        headway, min_d, gap = 1.0, 8.0, 15.0
+      else:
+        headway, min_d, gap = 0.8, 12.0, 25.0
+      target_dist = max(min_d, v_ego_ms * headway)
+      target_lead = max(0.0, v_ego_kmh - gap)
+
+    # Move distance toward target, rate-limited by physical closing/opening rates
+    delta_d = target_dist - self.distance
+    delta_d = max(-_VLC_MAX_CLOSE_RATE * dt, min(_VLC_MAX_OPEN_RATE * dt, delta_d))
+    self.distance += delta_d
+
+    # Move lead speed toward target, rate-limited by physical accel
+    delta_l = target_lead - self.lead_kmh
+    delta_l = max(-_VLC_MAX_LEAD_ACCEL_KMH * dt, min(_VLC_MAX_LEAD_ACCEL_KMH * dt, delta_l))
+    self.lead_kmh += delta_l
+
+    # Pack into int valid range
+    distance_int = max(0, min(255, int(round(self.distance))))
+    lead_kmh_int = max(0, min(255, int(round(self.lead_kmh))))
+    return distance_int, lead_kmh_int
 
 
 def _vlc_fsm4_byte5(accel: float, v_ego_ms: float) -> int:
@@ -143,25 +188,22 @@ def _vlc_fsm4_byte5(accel: float, v_ego_ms: float) -> int:
   return 0xB4
 
 
-def create_radar(packer, stock_fsm1, long_active: bool, accel: float = 0.0,
-                 v_ego_ms: float = 0.0, strong_braking: bool = False):
-  # When long_active: replace ACC_Distance, ACC_LeadConf, ACC_TargetState with
-  # virtual lead car values so the car's ACC accepts the desired deceleration.
+def create_radar(packer, stock_fsm1, long_active: bool, vlc_distance: int = 0,
+                 strong_braking: bool = False):
+  # When long_active: inject VLC values for ACC_Distance + ACC_LeadConf + ACC_TargetState.
+  # `vlc_distance` is computed by VLCState (CarController) and shared between FSM1 + FSM4.
   # B2 (ACC_TargetState) must follow the stock 5-frame header/data cycle:
   #   data frame (4 of 5): B2 = 184 mild / 188 strong (bit2 = strong flag)
   #   header frame (1 of 5): B2 = 0   mild / 4   strong (bit2 = strong flag)
-  # We detect the header frame from stock's ACC_FrameType (=0 in header, =73 in data),
-  # avoiding the need to track the camera's internal counter.
-  # `strong_braking` comes from CarController with hysteresis to avoid bit-2 flicker.
-  # Byte_3..7 are passthrough from stock — preserves the header/data cycle.
+  # We detect the header frame from stock's ACC_FrameType (=0 in header, =73 in data).
+  # `strong_braking` comes from CarController (with hysteresis on accel).
+  # Byte_3..7 are passthrough from stock — preserves the header/data cycle for B4/B6.
   if long_active:
-    _, distance = _vlc_speed_distance(accel, v_ego_ms)
     strong_bit = 4 if strong_braking else 0
-    # stock_fsm1["ACC_FrameType"] == 0 marks header frame in stock cycle
     is_header = stock_fsm1["ACC_FrameType"] == 0
     base_target = 0 if is_header else 184
     values = {
-      "ACC_Distance":    distance,
+      "ACC_Distance":    vlc_distance,
       "ACC_LeadConf":    _VLC_LEAD_CONF,
       "ACC_TargetState": base_target | strong_bit,
     }
@@ -176,29 +218,24 @@ def create_radar(packer, stock_fsm1, long_active: bool, accel: float = 0.0,
   return packer.make_can_msg("FSM1", 0, values)
 
 
-def create_fsm4(packer, stock_fsm4, long_active: bool, accel: float = 0.0, v_ego_ms: float = 0.0,
-                counter: int = 0, strong_braking: bool = False):
+def create_fsm4(packer, stock_fsm4, long_active: bool, accel: float = 0.0,
+                v_ego_ms: float = 0.0, vlc_lead_kmh: int = 0,
+                strong_braking: bool = False):
   # FSM4 when long_active: all bytes synthesized from stock-reverse-engineered rules.
-  #   Radar_Heartbeat       (B0): PASSTHROUGH from stock — ECM checks cadence; OP-generated
-  #                               9-9-12 cycle drifted out of sync (47% match with stock in
-  #                               000005d5 vs 100% in real lead passthrough) likely
-  #                               contributing to ECM fault. counter param kept for API stability.
+  #   Radar_Heartbeat       (B0): PASSTHROUGH from stock — ECM checks cadence
   #   Radar_StatusFlag      (B1): 0xF9 when standstill + strong braking, else 0xF1
-  #   Radar_LeadVelocityAlt (B2): linear regression with LeadSpeed (was counter%16, 2.8% match)
-  #   ACC_LeadSpeed         (B3): from regression (unchanged, MAE ~3.4 km/h)
+  #   Radar_LeadVelocityAlt (B2): linear from lead_kmh (regression with B3)
+  #   ACC_LeadSpeed         (B3): from VLCState (stateful, rate-limited)
   #   Byte_4                (B4): 0x8B fixed (143 ocasional ignored, 97% match)
   #   Radar_BrakingMode     (B5): accel-only scale (see _vlc_fsm4_byte5)
-  #   Radar_CRC             (B6): PASSTHROUGH — stock emits 256 unique values; likely
-  #                               checksum/rolling-code from internal radar firmware.
-  #   Byte_7                (B7): 0 fixed (100% match)
-  # `strong_braking` from CarController (with hysteresis) gates the StatusFlag standstill mark.
+  #   Radar_CRC             (B6): PASSTHROUGH — checksum/rolling-code from radar firmware
+  #   Byte_7                (B7): 0 fixed
   if long_active:
-    lead_speed, _ = _vlc_speed_distance(accel, v_ego_ms)
     values = {
       "Radar_Heartbeat":       stock_fsm4["Radar_Heartbeat"],
       "Radar_StatusFlag":      0xF9 if (v_ego_ms < 1.0 and strong_braking) else 0xF1,
-      "Radar_LeadVelocityAlt": max(0, min(255, int(round(0.977 * lead_speed + 0.752)))),
-      "ACC_LeadSpeed":         lead_speed,
+      "Radar_LeadVelocityAlt": max(0, min(255, int(round(0.977 * vlc_lead_kmh + 0.752)))),
+      "ACC_LeadSpeed":         vlc_lead_kmh,
       "Byte_4":                0x8B,
       "Radar_BrakingMode":     _vlc_fsm4_byte5(accel, v_ego_ms),
       "Radar_CRC":             stock_fsm4["Radar_CRC"],

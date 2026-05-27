@@ -51,11 +51,17 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     self.next_fsm4_tx_nanos = 0
     self.LONG_TX_PERIOD_NANOS = 20_000_000  # 50Hz, matching stock FSM3/FSM1
     self.FSM4_TX_PERIOD_NANOS = 30_000_000  # 33Hz, matching stock FSM4 cadence
-    self.vlc_counter = 0  # rolling counter for virtual lead car FSM4 byte fields (incremented per FSM4 TX)
 
     # Hysteresis for "strong braking" flag (FSM1 ACC_TargetState bit 2 and FSM4 BrakingMode).
     # Avoids rapid flips around accel ≈ -0.32 m/s² that confuse the ECM.
     self.strong_braking = False
+
+    # Stateful Virtual Lead Car — rate-limited motion (closing ≤20 m/s, opening ≤10 m/s,
+    # lead accel ≤3 m/s²). Reset on VLC activation so lead syncs to ego speed.
+    self.vlc_state = volvocan.VLCState()
+    self.vlc_active_prev = False
+    self.vlc_distance = 80   # latest VLC state output, shared between 50Hz FSM1 and 33Hz FSM4
+    self.vlc_lead_kmh = 0
 
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
@@ -152,6 +158,11 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       vlc_active = op_controls_long and v_ego_ms >= (30.0 / 3.6)
       op_accel = float(actuators.accel) if op_controls_long else float(CS.stock_FSM3["ACC_AccelerationRequest"])
 
+      # Reset VLCState on activation so virtual lead syncs to current ego speed
+      if vlc_active and not self.vlc_active_prev:
+        self.vlc_state.reset()
+      self.vlc_active_prev = vlc_active
+
       # Hysteresis on strong-braking flag (FSM1 ACC_TargetState bit 2, FSM4 BrakingMode).
       # Enter at -0.40 m/s², exit at -0.20 m/s² — avoids ECM seeing rapid flips around -0.32.
       if self.strong_braking:
@@ -159,7 +170,24 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       else:
         self.strong_braking = op_accel < -0.40
 
-    # 50Hz block — FSM1 + FSM3
+    # 33Hz block — FSM4 + VLCState update (lead virtual com física)
+    # VLCState evolves at FSM4 cadence (33Hz); FSM1 (50Hz) reuses latest state.
+    if fsm4_tx_due:
+      next_fsm4 = self.next_fsm4_tx_nanos + self.FSM4_TX_PERIOD_NANOS
+      if self.next_fsm4_tx_nanos == 0 or next_fsm4 <= now_nanos:
+        next_fsm4 = now_nanos + self.FSM4_TX_PERIOD_NANOS
+      self.next_fsm4_tx_nanos = next_fsm4
+
+      if vlc_active:
+        self.vlc_distance, self.vlc_lead_kmh = self.vlc_state.update(
+          op_accel, v_ego_ms, dt=self.FSM4_TX_PERIOD_NANOS / 1e9
+        )
+
+      can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4, vlc_active,
+                                            op_accel, v_ego_ms, self.vlc_lead_kmh,
+                                            self.strong_braking))
+
+    # 50Hz block — FSM1 + FSM3 (reusa VLCState atualizada no bloco 33Hz)
     if long_tx_due:
       next_tx = self.next_long_tx_nanos + self.LONG_TX_PERIOD_NANOS
       if self.next_long_tx_nanos == 0 or next_tx <= now_nanos:
@@ -172,19 +200,9 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       else:
         acc_check = int(CS.stock_FSM3["ACC_Check"])
 
-      can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, vlc_active, op_accel, v_ego_ms, self.strong_braking))
+      can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1, vlc_active,
+                                             self.vlc_distance, self.strong_braking))
       can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3, op_accel, acc_check))
-
-    # 33Hz block — FSM4 (matches stock cam rate; counter advances per-FSM4-tick so
-    # Heartbeat 9-9-12 cycle has correct wall-clock duration)
-    if fsm4_tx_due:
-      next_fsm4 = self.next_fsm4_tx_nanos + self.FSM4_TX_PERIOD_NANOS
-      if self.next_fsm4_tx_nanos == 0 or next_fsm4 <= now_nanos:
-        next_fsm4 = now_nanos + self.FSM4_TX_PERIOD_NANOS
-      self.next_fsm4_tx_nanos = next_fsm4
-
-      can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4, vlc_active, op_accel, v_ego_ms, self.vlc_counter, self.strong_braking))
-      self.vlc_counter += 1
 
     # Refresh custom ACC step every 100 frames and forward to carstate so that
     # _pending_delta emits exactly one synthetic event per physical ACC step.
