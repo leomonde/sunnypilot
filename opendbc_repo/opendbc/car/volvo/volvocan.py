@@ -76,43 +76,79 @@ def create_longitudinal(packer, stock_fsm3, accel, acc_check):
 
 
 # ── Virtual Lead Car (VLC) ────────────────────────────────────────────────────
-# Coefficients from linear regression on V60 log data (41 k samples, FrontCar=1):
+# Reverse-engineered from V60 stock camera (route 000005ca, 28k lead-active samples).
+# Linear regression for kinematic values:
 #   lead_speed_kmh = A_LS * v_ego_ms + B_LS * accel_mss + C_LS  (R²=0.945)
 #   distance_m     = A_D  * v_ego_ms + B_D  * accel_mss + C_D   (R²=0.523)
 _VLC_A_LS, _VLC_B_LS, _VLC_C_LS = 3.141, 2.667, 3.835
 _VLC_A_D,  _VLC_B_D,  _VLC_C_D  = 1.621, 4.002, -1.097
 
-# FSM4 Byte_5: high-nibble encodes braking mode observed in stock data.
-# 0xB0 = mild tracking; 0xF0 = strong braking (threshold ~-0.5 m/s²).
-# Low nibble 0x3 is the mid-range counter value; actual counter cycles 1-4.
-_VLC_BYTE5_MILD   = 0xB3   # 179
-_VLC_BYTE5_STRONG = 0xF3   # 243
+# Strong-braking threshold for ACC_TargetState bit-2 (188 vs 184) and FSM4 B5.
+# Observed transition point in stock data: 50% strong at accel ≈ -0.32 m/s².
+_VLC_STRONG_THRESHOLD = -0.32
+
+# ACC_LeadConf: stock emits 243-255 (255 dominant ~69%). 240 is out of range.
+_VLC_LEAD_CONF = 255
+
+# FSM4 Byte_0 cycle: stock runs 9-9-12 frames alternating 0x55/0xAA (period 60).
+# Phase boundaries (cumulative): 9, 18, 30, 39, 48, 60
+# Compare to old toggle-per-frame which gives 50% match only.
+_VLC_B0_BOUNDARIES = (9, 18, 30, 39, 48, 60)
 
 
-def _vlc_values(accel: float, v_ego_ms: float) -> tuple[int, int, int, int]:
-  """Return (lead_speed_kmh, distance_m, target_state, lead_conf) for a virtual lead car.
-
-  lead_speed_kmh and distance_m are rounded integers ready for packing.
-  target_state: 184 = mild braking, 188 = strong braking (bit 2 = active brake flag).
-  lead_conf: fixed high-confidence value derived from log statistics.
-  """
+def _vlc_speed_distance(accel: float, v_ego_ms: float) -> tuple[int, int]:
+  """Lead speed (km/h) and distance (m) for virtual lead car."""
   lead_speed = int(round(max(0.0, min(250.0, _VLC_A_LS * v_ego_ms + _VLC_B_LS * accel + _VLC_C_LS))))
-  distance   = int(round(max(8.0, min(120.0, _VLC_A_D  * v_ego_ms + _VLC_B_D  * accel + _VLC_C_D))))
-  target_state = 184 if accel >= -0.5 else 188
-  lead_conf    = 240
-  return lead_speed, distance, target_state, lead_conf
+  distance   = int(round(max(3.0,  min(120.0, _VLC_A_D  * v_ego_ms + _VLC_B_D  * accel + _VLC_C_D))))
+  return lead_speed, distance
+
+
+def _vlc_fsm4_byte0(counter: int) -> int:
+  """FSM4 B0: 9-9-12 frame runs alternating 0x55/0xAA (period 60). Matches stock cadence."""
+  phase = counter % 60
+  for i, boundary in enumerate(_VLC_B0_BOUNDARIES):
+    if phase < boundary:
+      return 0x55 if (i % 2 == 0) else 0xAA
+  return 0x55  # unreachable
+
+
+def _vlc_fsm4_byte5(accel: float, v_ego_ms: float) -> int:
+  """FSM4 B5: 7-level scale (high nibble = severity, low nibble = sub-mode).
+  Observed in stock: 0xB3 leve frenagem, 0xB4 dominante neutro/positivo, 0xB5 accel forte
+  baixa vel; 0xF1 frenagem forte alta vel, 0xF2 moderada, 0xF3 leve, 0xF4 transição.
+  """
+  if accel < -2.0:
+    return 0xF1
+  if accel < -1.0:
+    return 0xF2
+  if accel < _VLC_STRONG_THRESHOLD:
+    return 0xF3
+  if accel > 0.4 and v_ego_ms < 4.0:
+    return 0xB5
+  if accel >= -0.05:
+    return 0xB4
+  return 0xB3
 
 
 def create_radar(packer, stock_fsm1, long_active: bool, accel: float = 0.0, v_ego_ms: float = 0.0):
   # When long_active: replace ACC_Distance, ACC_LeadConf, ACC_TargetState with
   # virtual lead car values so the car's ACC accepts the desired deceleration.
-  # Keep Byte_3..7 from stock in both modes to avoid triggering unknown checks.
+  # B2 (ACC_TargetState) must follow the stock 5-frame header/data cycle:
+  #   data frame (4 of 5): B2 = 184 mild / 188 strong (bit2 = strong flag)
+  #   header frame (1 of 5): B2 = 0   mild / 4   strong (bit2 = strong flag)
+  # We detect the header frame from stock's B4 (=0 in header, =73 in data),
+  # avoiding the need to track the camera's internal counter.
+  # Byte_3..7 are passthrough from stock — preserves the header/data cycle for B4/B6.
   if long_active:
-    _, distance, target_state, lead_conf = _vlc_values(accel, v_ego_ms)
+    _, distance = _vlc_speed_distance(accel, v_ego_ms)
+    strong_bit = 4 if accel < _VLC_STRONG_THRESHOLD else 0
+    # stock_fsm1["Byte_4"] == 0 marks header frame in stock cycle
+    is_header = stock_fsm1["Byte_4"] == 0
+    base_target = 0 if is_header else 184
     values = {
       "ACC_Distance":    distance,
-      "ACC_LeadConf":    lead_conf,
-      "ACC_TargetState": target_state,
+      "ACC_LeadConf":    _VLC_LEAD_CONF,
+      "ACC_TargetState": base_target | strong_bit,
     }
   else:
     values = {
@@ -126,23 +162,27 @@ def create_radar(packer, stock_fsm1, long_active: bool, accel: float = 0.0, v_eg
 
 
 def create_fsm4(packer, stock_fsm4, long_active: bool, accel: float = 0.0, v_ego_ms: float = 0.0, counter: int = 0):
-  # When long_active: build FSM4 with virtual ACC_LeadSpeed and braking-mode Byte_5.
-  # Byte_0 toggles 0x55/0xAA each message (observed in stock data).
-  # Byte_1 = 0xF1 (241, fixed in stock).
-  # Byte_2 and Byte_6 carry rolling counters; use counter mod 16.
-  # Byte_4 = 0x8B (139, dominant value in stock data).
-  # Byte_7 = 0.
+  # FSM4 when long_active: all bytes synthesized from stock-reverse-engineered rules.
+  #   B0: 9-9-12 frame runs alternating 0x55/0xAA (was: toggle every frame, 50% match)
+  #   B1: 0xF9 when standstill + strong braking, else 0xF1
+  #   B2: linear regression with LeadSpeed (was: counter%16, 2.8% match)
+  #   B3: ACC_LeadSpeed from regression (unchanged, MAE ~3.4 km/h)
+  #   B4: 0x8B fixed (143 ocasional ignored, 97% match)
+  #   B5: 7-level scale by (accel, v_ego) (was: 2 levels, 28% match)
+  #   B6: PASSTHROUGH from stock — stock emits 256 unique values, likely
+  #       checksum/CRC/rolling-code from internal radar. Replicating would
+  #       require firmware-level understanding. Passthrough is safest.
+  #   B7: 0 fixed (100% match)
   if long_active:
-    lead_speed, _, _, _ = _vlc_values(accel, v_ego_ms)
-    byte5 = _VLC_BYTE5_MILD if accel >= -0.5 else _VLC_BYTE5_STRONG
+    lead_speed, _ = _vlc_speed_distance(accel, v_ego_ms)
     values = {
-      "Byte_0":        0x55 if (counter % 2 == 0) else 0xAA,
-      "Byte_1":        0xF1,
-      "Byte_2":        counter % 16,
+      "Byte_0":        _vlc_fsm4_byte0(counter),
+      "Byte_1":        0xF9 if (v_ego_ms < 1.0 and accel < -0.5) else 0xF1,
+      "Byte_2":        max(0, min(255, int(round(0.977 * lead_speed + 0.752)))),
       "ACC_LeadSpeed": lead_speed,
       "Byte_4":        0x8B,
-      "Byte_5":        byte5,
-      "Byte_6":        counter % 16,
+      "Byte_5":        _vlc_fsm4_byte5(accel, v_ego_ms),
+      "Byte_6":        stock_fsm4["Byte_6"],
       "Byte_7":        0,
     }
   else:
