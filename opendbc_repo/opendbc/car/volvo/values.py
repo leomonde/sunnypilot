@@ -30,6 +30,9 @@ class CarControllerParams:
   # Phase 1b: suppress OP negative accel within this gap of ACC_Speed target.
   # Stock relaxes braking near setpoint; OP planner is slower → ECM rejects divergence.
   ACC_SPEED_COHERENCE_MARGIN = 1.4  # m/s (~5 km/h)
+  # Phase 2: with real lead, clamp OP accel within ±this of stock's accel.
+  # Lead data passes through (real), OP only adjusts braking magnitude.
+  BRAKE_CLAMP_MARGIN = 0.3  # m/s² — start conservative, raise after validation
 
   def __init__(self, CP):
     pass  # CP currently unused; kept for API compatibility

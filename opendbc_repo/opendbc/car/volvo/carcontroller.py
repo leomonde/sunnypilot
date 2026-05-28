@@ -134,19 +134,27 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     fsm4_tx_due = now_nanos >= self.next_fsm4_tx_nanos
     if long_tx_due or fsm4_tx_due:
       v_ego_ms = CS.out.vEgoRaw
-      # Phase 1: OP só atua sem lead real (com lead → passthrough; stock cuida via FSM0 cross-msg).
-      # CC.longActive sozinho não basta (pcmCruise=True → sempre True quando ACC on).
+      # Phase 1 (no lead): OP fully controls — cruise reduction pattern (Distance=255).
+      # Phase 2 (with lead): OP overrides brake params but lead data passes through;
+      # accel is clamped within ±BRAKE_CLAMP_MARGIN of stock to avoid ECM rejection.
       stock_has_real_lead = CS.stock_FSM1["ACC_Distance"] < 200
-      op_controls_long = (
-        self.CP.openpilotLongitudinalControl
-        and CC.longActive
-        and not stock_has_real_lead
-      )
-      op_accel = float(actuators.accel) if op_controls_long else float(CS.stock_FSM3["ACC_AccelerationRequest"])
+      op_active = self.CP.openpilotLongitudinalControl and CC.longActive
+      stock_accel = float(CS.stock_FSM3["ACC_AccelerationRequest"])
+      if op_active:
+        op_accel_raw = float(actuators.accel)
+        if stock_has_real_lead:
+          op_accel = max(stock_accel - CarControllerParams.BRAKE_CLAMP_MARGIN,
+                         min(op_accel_raw, stock_accel + CarControllerParams.BRAKE_CLAMP_MARGIN))
+        else:
+          op_accel = op_accel_raw
+      else:
+        op_accel = stock_accel
+      op_controls_long = op_active  # carries OP override into FSM1/3/4 builders
+      has_real_lead = stock_has_real_lead
 
       # Phase 1b: ACC_Speed coherence guard. When vEgo nears the cruise setpoint, stock
       # stops requesting brake; OP's planner lags → ECM sees divergence and rejects ACC.
-      if op_controls_long and op_accel < 0:
+      if op_active and op_accel < 0:
         acc_target_ms = CS.out.cruiseState.speed
         if v_ego_ms >= (acc_target_ms - CarControllerParams.ACC_SPEED_COHERENCE_MARGIN):
           op_accel = 0.0
@@ -175,7 +183,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
 
       can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4,
                                             op_controls_long, op_accel, v_ego_ms,
-                                            self.strong_braking))
+                                            self.strong_braking, has_real_lead))
 
     # 50Hz — FSM1 + FSM3
     if long_tx_due:
@@ -191,7 +199,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         acc_check = int(CS.stock_FSM3["ACC_Check"])
 
       can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1,
-                                             op_controls_long, self.strong_braking))
+                                             op_controls_long, self.strong_braking, has_real_lead))
       can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3,
                                                     op_accel, acc_check, self.vlc_active))
 

@@ -101,10 +101,21 @@ def _vlc_fsm4_byte5(accel: float, v_ego_ms: float) -> int:
   return 0xB4
 
 
-def create_radar(packer, stock_fsm1, long_active: bool, strong_braking: bool = False):
-  # FSM1 — when long_active: send Distance=255 + LeadConf=255 (stock cruise reduction pattern).
-  # TargetState follows stock 5-frame cycle: data=184/188, header=0/4 (bit2 = strong).
-  if long_active:
+def create_radar(packer, stock_fsm1, long_active: bool, strong_braking: bool = False,
+                 has_real_lead: bool = False):
+  # FSM1 modes:
+  # - long_active + no lead: Phase 1 — Distance=255/LeadConf=255 (stock cruise reduction).
+  # - long_active + lead:    Phase 2 — passthrough lead data; OP only adds TargetState bit 2.
+  # - !long_active:          passthrough stock.
+  if long_active and has_real_lead:
+    stock_target = int(stock_fsm1["ACC_TargetState"])
+    values = {
+      "ACC_Distance":    stock_fsm1["ACC_Distance"],
+      "ACC_LeadConf":    stock_fsm1["ACC_LeadConf"],
+      # Only ADD strong bit — never strip stock's own bit 2.
+      "ACC_TargetState": stock_target | (0b100 if strong_braking else 0),
+    }
+  elif long_active:
     strong_bit = 4 if strong_braking else 0
     is_header = stock_fsm1["ACC_FrameType"] == 0
     base_target = 0 if is_header else 184
@@ -114,7 +125,6 @@ def create_radar(packer, stock_fsm1, long_active: bool, strong_braking: bool = F
       "ACC_TargetState": base_target | strong_bit,
     }
   else:
-    # passthrough
     values = {
       "ACC_Distance":    stock_fsm1["ACC_Distance"],
       "ACC_LeadConf":    stock_fsm1["ACC_LeadConf"],
@@ -126,10 +136,24 @@ def create_radar(packer, stock_fsm1, long_active: bool, strong_braking: bool = F
 
 
 def create_fsm4(packer, stock_fsm4, long_active: bool, accel: float = 0.0,
-                v_ego_ms: float = 0.0, strong_braking: bool = False):
-  # FSM4 — when long_active: stock no-lead pattern. Heartbeat/CRC passthrough (ECM checks cadence).
-  # StatusFlag=0xF9 só em standstill+strong; B4=0x8B (stock dominante); B5 escalado por accel.
-  if long_active:
+                v_ego_ms: float = 0.0, strong_braking: bool = False,
+                has_real_lead: bool = False):
+  # FSM4 modes (Heartbeat/CRC always passthrough — ECM checks cadence):
+  # - long_active + lead:   Phase 2 — passthrough lead fields; OP overrides BrakingMode.
+  # - long_active + nolead: Phase 1 — synthetic no-lead pattern (StatusFlag/B4/LeadSpeed=0).
+  # - !long_active:         full passthrough.
+  if long_active and has_real_lead:
+    values = {
+      "Radar_Heartbeat":       stock_fsm4["Radar_Heartbeat"],
+      "Radar_StatusFlag":      stock_fsm4["Radar_StatusFlag"],
+      "Radar_LeadVelocityAlt": stock_fsm4["Radar_LeadVelocityAlt"],
+      "ACC_LeadSpeed":         stock_fsm4["ACC_LeadSpeed"],
+      "Byte_4":                stock_fsm4["Byte_4"],
+      "Radar_BrakingMode":     _vlc_fsm4_byte5(accel, v_ego_ms),
+      "Radar_CRC":             stock_fsm4["Radar_CRC"],
+      "Byte_7":                stock_fsm4["Byte_7"],
+    }
+  elif long_active:
     values = {
       "Radar_Heartbeat":       stock_fsm4["Radar_Heartbeat"],
       "Radar_StatusFlag":      0xF9 if (v_ego_ms < 1.0 and strong_braking) else 0xF1,
@@ -141,7 +165,6 @@ def create_fsm4(packer, stock_fsm4, long_active: bool, accel: float = 0.0,
       "Byte_7":                0,
     }
   else:
-    # passthrough
     values = {s: stock_fsm4[s] for s in (
       "Radar_Heartbeat", "Radar_StatusFlag", "Radar_LeadVelocityAlt", "ACC_LeadSpeed",
       "Byte_4", "Radar_BrakingMode", "Radar_CRC", "Byte_7",
