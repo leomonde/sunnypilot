@@ -55,23 +55,32 @@ def create_lka_msg(packer, apply_steer: float, steer_direction: int):
   return packer.make_can_msg("FSM2", 0, values)
 
 
-def create_longitudinal(packer, stock_fsm3, accel, acc_check):
-  # pass stock FSM3 verbatim except ACC_AccelerationRequest and ACC_Check; bit flip faults ECU (drive 27)
+def create_longitudinal(packer, stock_fsm3, accel, acc_check, vlc_active: bool = False):
+  # Pass stock FSM3 verbatim except ACC_AccelerationRequest and ACC_Check; bit flip faults ECU (drive 27).
   # ACC_FaultFlag (bit 5 of former byte 7) is forced to 0 — OP must never signal fault itself.
-  values = {s: stock_fsm3[s] for s in (
-    "ACC_Standstill",
-    "Byte_01",
-    "Byte_02",
-    "Byte_2",
-    "Byte_3",
-    "Byte_4",
-    "Byte_5",
-    "Byte_6",
-  )}
-  values |= {
+  #
+  # When vlc_active: force bit 6 of byte 0 (= "LEAD CLOSE" flag observed in stock).
+  # Stock sets this bit in 97% of frames with Distance < 30m, 0% without close lead.
+  # Bit 6 of byte 0 is inside the Byte_01 signal (covers bits 7-3, 5 bits).
+  # Bit 6 of byte 0 = bit 3 within Byte_01 → value 0b01000 = 8.
+  # Without this bit, ECM rejects hydraulic braking authority after a few seconds
+  # (observed in 000005d5, 000005dc — fault while OP commanded B5=0xF3).
+  byte_01 = int(stock_fsm3["Byte_01"])
+  if vlc_active:
+    byte_01 |= 0b01000   # set bit 6 of byte 0 = LEAD CLOSE flag
+
+  values = {
+    "ACC_Standstill": stock_fsm3["ACC_Standstill"],
+    "Byte_01":        byte_01,
+    "Byte_02":        stock_fsm3["Byte_02"],
+    "Byte_2":         stock_fsm3["Byte_2"],
+    "Byte_3":         stock_fsm3["Byte_3"],
+    "Byte_4":         stock_fsm3["Byte_4"],
+    "Byte_5":         stock_fsm3["Byte_5"],
+    "Byte_6":         stock_fsm3["Byte_6"],
     "ACC_AccelerationRequest": accel,
-    "ACC_Check": acc_check,
-    "ACC_FaultFlag": 0,
+    "ACC_Check":      acc_check,
+    "ACC_FaultFlag":  0,
   }
   return packer.make_can_msg("FSM3", 0, values)
 
@@ -200,7 +209,7 @@ def create_fsm4(packer, stock_fsm4, long_active: bool, vlc_active: bool = False,
   #   Radar_StatusFlag      (B1): 0xF9 when standstill + strong braking, else 0xF1
   #   Radar_LeadVelocityAlt (B2): linear from lead_kmh (regression with B3)
   #   ACC_LeadSpeed         (B3): VLC lead speed when vlc_active, else 0
-  #   Byte_4                (B4): 0x8B fixed
+  #   Byte_4                (B4): 0x8B with lead, 0x8F without (stock observed flag)
   #   Radar_BrakingMode     (B5): accel-only scale (_vlc_fsm4_byte5)
   #   Radar_CRC             (B6): PASSTHROUGH — checksum from radar firmware
   #   Byte_7                (B7): 0 fixed
@@ -214,7 +223,7 @@ def create_fsm4(packer, stock_fsm4, long_active: bool, vlc_active: bool = False,
       "Radar_StatusFlag":      0xF9 if (v_ego_ms < 1.0 and strong_braking) else 0xF1,
       "Radar_LeadVelocityAlt": max(0, min(255, int(round(0.977 * lead_kmh + 0.752)))),
       "ACC_LeadSpeed":         lead_kmh,
-      "Byte_4":                0x8B,
+      "Byte_4":                0x8B if vlc_active else 0x8F,
       "Radar_BrakingMode":     _vlc_fsm4_byte5(accel, v_ego_ms),
       "Radar_CRC":             stock_fsm4["Radar_CRC"],
       "Byte_7":                0,
