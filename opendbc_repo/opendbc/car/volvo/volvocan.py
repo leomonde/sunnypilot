@@ -77,85 +77,45 @@ def create_longitudinal(packer, stock_fsm3, accel, acc_check):
 
 
 # ── Virtual Lead Car (VLC) ────────────────────────────────────────────────────
-# Stateful lead simulation with physically-plausible motion.
-# The ECM authorizes hydraulic braking when it "sees" a close lead car. The OP
-# manipulates lead distance + speed to justify the AccelRequest it commands.
-# Movement is rate-limited so distance/speed evolve plausibly between frames,
-# avoiding the "lead teleporting" pattern that caused ECM faults in earlier
-# attempts (e.g. 000005d5 seg 0: VLC distance jumped from 255→17m on activation).
+# Simplified strategy: only inject VLC when OP commands hydraulic braking
+# (accel < -0.5, where stock starts using B5 high-nibble F).
 #
-# Targets per accel bucket — derived from stock observation (34k samples with
-# real lead, 000005ca + 000005cf):
+# Without VLC (cruise / acceleration / engine braking): pretend no lead.
+#   ACC_Distance=255, ACC_LeadConf=0, ACC_TargetState=mild (184/0), B5=B3/B4.
+#   AccelRequest still commanded by OP; ECM accepts mild commands without lead.
 #
-#   accel range          headway   min_dist  gap_kmh (lead slower than ego)
-#   ≥ 0      (cruise)    cruise:   dist=80m, lead = ego + 2 km/h (afastando levemente)
-#   -0.3..0  (very mild) 2.0 s     20 m      3
-#   -0.5..-0.3 (mild)    1.5 s     12 m      6
-#   -1.0..-0.5 (moderate) 1.2 s    10 m      10
-#   -1.5..-1.0 (strong)  1.0 s      8 m      15
-#   < -1.5   (very strong) 0.8 s   12 m      25
+# With VLC (hydraulic braking): inject close + slower lead to justify the brake.
+#   ACC_Distance/LeadSpeed from formulas (validated against stock observed values).
+#   ACC_LeadConf=255, ACC_TargetState=strong (188/4), B5=F3/F2/F1.
+#
+# Hysteresis on activation prevents VLC flicker around the -0.5 boundary:
+#   enter VLC when accel < -0.55
+#   exit  VLC when accel > -0.40
+#
+# Transição abrupta on VLC enter/exit is accepted (mimics a lead car cutting
+# into / out of lane).
+#
+# Distance / LeadSpeed formulas (option "C" hybrid simples-com-accel):
+#   distance_m   = max(8, v_ego_ms * 1.5 + accel * 4)
+#   lead_kmh     = max(0, v_ego_kmh - 5 - (-accel) * 8)
+#
+# Validation against 2.3k stock samples (accel<-0.5, lead present):
+#   distance MAE ≈ 3m   (stock median 10m, vEgo median 14 km/h)
+#   lead_kmh MAE ≈ 6 km/h
 
-_VLC_LEAD_CONF = 255          # stock emits 243-255 (255 dominant ~69%)
-_VLC_CRUISE_DIST = 80.0       # cruise: lead distante (stock p90=84m)
-_VLC_CRUISE_LEAD_OFFSET = 2.0 # km/h above ego in cruise (slight opening)
-
-# Physical motion limits (per second)
-_VLC_MAX_CLOSE_RATE = 20.0   # m/s — lead approaching (= 72 km/h relative)
-_VLC_MAX_OPEN_RATE  = 10.0   # m/s — lead moving away  (= 36 km/h relative)
-_VLC_MAX_LEAD_ACCEL_KMH = 10.8  # km/h per second (= 3 m/s²)
+_VLC_LEAD_CONF = 255       # stock emits 243-255 with lead (255 dominant ~69%)
+_VLC_ENTER_THRESHOLD = -0.55  # accel must drop below this to enter VLC mode
+_VLC_EXIT_THRESHOLD  = -0.40  # accel must rise above this to exit VLC mode
 
 
-class VLCState:
-  """Stateful virtual lead car. Updated once per FSM4 TX (33Hz)."""
-  def __init__(self):
-    self.distance = _VLC_CRUISE_DIST     # m, init: distant (cruise)
-    self.lead_kmh = 0.0                  # km/h, will sync to ego on first update
-    self.initialized = False
-
-  def reset(self):
-    """Call when entering VLC mode after being inactive."""
-    self.distance = _VLC_CRUISE_DIST
-    self.initialized = False
-
-  def update(self, accel: float, v_ego_ms: float, dt: float = 0.030):
-    """Advance state one step; returns (distance_int, lead_speed_kmh_int)."""
-    v_ego_kmh = v_ego_ms * 3.6
-    if not self.initialized:
-      self.lead_kmh = v_ego_kmh + _VLC_CRUISE_LEAD_OFFSET
-      self.initialized = True
-
-    # Target based on accel bucket (stock-observed values)
-    if accel >= 0:
-      target_dist = _VLC_CRUISE_DIST
-      target_lead = v_ego_kmh + _VLC_CRUISE_LEAD_OFFSET
-    else:
-      if accel >= -0.3:
-        headway, min_d, gap = 2.0, 20.0, 3.0
-      elif accel >= -0.5:
-        headway, min_d, gap = 1.5, 12.0, 6.0
-      elif accel >= -1.0:
-        headway, min_d, gap = 1.2, 10.0, 10.0
-      elif accel >= -1.5:
-        headway, min_d, gap = 1.0, 8.0, 15.0
-      else:
-        headway, min_d, gap = 0.8, 12.0, 25.0
-      target_dist = max(min_d, v_ego_ms * headway)
-      target_lead = max(0.0, v_ego_kmh - gap)
-
-    # Move distance toward target, rate-limited by physical closing/opening rates
-    delta_d = target_dist - self.distance
-    delta_d = max(-_VLC_MAX_CLOSE_RATE * dt, min(_VLC_MAX_OPEN_RATE * dt, delta_d))
-    self.distance += delta_d
-
-    # Move lead speed toward target, rate-limited by physical accel
-    delta_l = target_lead - self.lead_kmh
-    delta_l = max(-_VLC_MAX_LEAD_ACCEL_KMH * dt, min(_VLC_MAX_LEAD_ACCEL_KMH * dt, delta_l))
-    self.lead_kmh += delta_l
-
-    # Pack into int valid range
-    distance_int = max(0, min(255, int(round(self.distance))))
-    lead_kmh_int = max(0, min(255, int(round(self.lead_kmh))))
-    return distance_int, lead_kmh_int
+def _vlc_brake_values(accel: float, v_ego_ms: float) -> tuple[int, int]:
+  """Distance (m) and lead speed (km/h) for the virtual lead during hydraulic braking.
+  Formula 'C': headway-based with accel adjustment, gap proportional to accel intensity.
+  """
+  v_ego_kmh = v_ego_ms * 3.6
+  distance_m = max(8.0, v_ego_ms * 1.5 + accel * 4.0)
+  lead_kmh   = max(0.0, v_ego_kmh - 5.0 - (-accel) * 8.0)
+  return int(round(distance_m)), int(round(lead_kmh))
 
 
 def _vlc_fsm4_byte5(accel: float, v_ego_ms: float) -> int:
@@ -188,26 +148,38 @@ def _vlc_fsm4_byte5(accel: float, v_ego_ms: float) -> int:
   return 0xB4
 
 
-def create_radar(packer, stock_fsm1, long_active: bool, vlc_distance: int = 0,
+def create_radar(packer, stock_fsm1, long_active: bool, vlc_active: bool = False,
+                 accel: float = 0.0, v_ego_ms: float = 0.0,
                  strong_braking: bool = False):
-  # When long_active: inject VLC values for ACC_Distance + ACC_LeadConf + ACC_TargetState.
-  # `vlc_distance` is computed by VLCState (CarController) and shared between FSM1 + FSM4.
-  # B2 (ACC_TargetState) must follow the stock 5-frame header/data cycle:
-  #   data frame (4 of 5): B2 = 184 mild / 188 strong (bit2 = strong flag)
-  #   header frame (1 of 5): B2 = 0   mild / 4   strong (bit2 = strong flag)
-  # We detect the header frame from stock's ACC_FrameType (=0 in header, =73 in data).
-  # `strong_braking` comes from CarController (with hysteresis on accel).
-  # Byte_3..7 are passthrough from stock — preserves the header/data cycle for B4/B6.
+  # `long_active`: OP is controlling longitudinal (= injecting on FSM1/FSM3/FSM4).
+  # `vlc_active`: VLC mode (hydraulic braking) — inject close lead. Else: pretend no lead.
+  #
+  # B2 (ACC_TargetState) follows the stock 5-frame header/data cycle:
+  #   data frame (4 of 5): 184 mild / 188 strong (bit2 = strong flag)
+  #   header frame (1 of 5): 0    mild / 4   strong (bit2 = strong flag)
+  # Header detected from stock's ACC_FrameType (=0 in header, =73 in data).
+  # B3..B7 are passthrough from stock — preserves the header/data cycle for B4/B6.
   if long_active:
     strong_bit = 4 if strong_braking else 0
     is_header = stock_fsm1["ACC_FrameType"] == 0
     base_target = 0 if is_header else 184
-    values = {
-      "ACC_Distance":    vlc_distance,
-      "ACC_LeadConf":    _VLC_LEAD_CONF,
-      "ACC_TargetState": base_target | strong_bit,
-    }
+    if vlc_active:
+      # Hydraulic braking: inject close lead to justify the brake authority
+      distance, _ = _vlc_brake_values(accel, v_ego_ms)
+      values = {
+        "ACC_Distance":    distance,
+        "ACC_LeadConf":    _VLC_LEAD_CONF,
+        "ACC_TargetState": base_target | strong_bit,
+      }
+    else:
+      # No VLC: pretend there is no lead car — cruise mode
+      values = {
+        "ACC_Distance":    255,
+        "ACC_LeadConf":    0,
+        "ACC_TargetState": base_target,    # always mild (no strong bit)
+      }
   else:
+    # oplong off — passthrough total
     values = {
       "ACC_Distance":    stock_fsm1["ACC_Distance"],
       "ACC_LeadConf":    stock_fsm1["ACC_LeadConf"],
@@ -218,30 +190,37 @@ def create_radar(packer, stock_fsm1, long_active: bool, vlc_distance: int = 0,
   return packer.make_can_msg("FSM1", 0, values)
 
 
-def create_fsm4(packer, stock_fsm4, long_active: bool, accel: float = 0.0,
-                v_ego_ms: float = 0.0, vlc_lead_kmh: int = 0,
+def create_fsm4(packer, stock_fsm4, long_active: bool, vlc_active: bool = False,
+                accel: float = 0.0, v_ego_ms: float = 0.0,
                 strong_braking: bool = False):
-  # FSM4 when long_active: all bytes synthesized from stock-reverse-engineered rules.
+  # `long_active`: OP controlling longitudinal. `vlc_active`: hydraulic brake mode.
+  #
+  # Bytes:
   #   Radar_Heartbeat       (B0): PASSTHROUGH from stock — ECM checks cadence
   #   Radar_StatusFlag      (B1): 0xF9 when standstill + strong braking, else 0xF1
   #   Radar_LeadVelocityAlt (B2): linear from lead_kmh (regression with B3)
-  #   ACC_LeadSpeed         (B3): from VLCState (stateful, rate-limited)
-  #   Byte_4                (B4): 0x8B fixed (143 ocasional ignored, 97% match)
-  #   Radar_BrakingMode     (B5): accel-only scale (see _vlc_fsm4_byte5)
-  #   Radar_CRC             (B6): PASSTHROUGH — checksum/rolling-code from radar firmware
+  #   ACC_LeadSpeed         (B3): VLC lead speed when vlc_active, else 0
+  #   Byte_4                (B4): 0x8B fixed
+  #   Radar_BrakingMode     (B5): accel-only scale (_vlc_fsm4_byte5)
+  #   Radar_CRC             (B6): PASSTHROUGH — checksum from radar firmware
   #   Byte_7                (B7): 0 fixed
   if long_active:
+    if vlc_active:
+      _, lead_kmh = _vlc_brake_values(accel, v_ego_ms)
+    else:
+      lead_kmh = 0    # no lead → lead speed irrelevant
     values = {
       "Radar_Heartbeat":       stock_fsm4["Radar_Heartbeat"],
       "Radar_StatusFlag":      0xF9 if (v_ego_ms < 1.0 and strong_braking) else 0xF1,
-      "Radar_LeadVelocityAlt": max(0, min(255, int(round(0.977 * vlc_lead_kmh + 0.752)))),
-      "ACC_LeadSpeed":         vlc_lead_kmh,
+      "Radar_LeadVelocityAlt": max(0, min(255, int(round(0.977 * lead_kmh + 0.752)))),
+      "ACC_LeadSpeed":         lead_kmh,
       "Byte_4":                0x8B,
       "Radar_BrakingMode":     _vlc_fsm4_byte5(accel, v_ego_ms),
       "Radar_CRC":             stock_fsm4["Radar_CRC"],
       "Byte_7":                0,
     }
   else:
+    # oplong off — passthrough total
     values = {s: stock_fsm4[s] for s in (
       "Radar_Heartbeat", "Radar_StatusFlag", "Radar_LeadVelocityAlt", "ACC_LeadSpeed",
       "Byte_4", "Radar_BrakingMode", "Radar_CRC", "Byte_7",
