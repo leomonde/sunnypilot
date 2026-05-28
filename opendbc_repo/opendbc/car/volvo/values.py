@@ -6,15 +6,10 @@ from opendbc.car.docs_definitions import CarHarness, CarDocs, CarParts
 from opendbc.car.fw_query_definitions import FwQueryConfig, Request, p16
 from opendbc.car.structs import CarParams
 
-from opendbc.can import CANDefine
-
 Ecu = CarParams.Ecu
 
-# Volvo EUCD/C1MCA CAN buses: pt (BCM/FSM/PSCM/SAS), chassis (DIM/PAM via CEM), ext (SODL/SODR via CEM)
-
-
 class SteerDirection(IntEnum):
-  """LKASteerDirection: EUCD needs 8-frame wait on direction change; C1MCA can use BOTH."""
+  # LKASteerDirection: EUCD needs 8-frame wait on direction change; C1MCA can use BOTH.
   NONE = 0
   RIGHT = 1
   LEFT = 2
@@ -27,24 +22,23 @@ class CarControllerParams:
     ([0., 5., 15.], [5., 3.5, 0.4]),
   )
 
-  STEER_TIMEOUT = 30 / DT_CTRL  # frames before steer fault on sustained 0-torque from EPS
-  BLOCK_LEN = 8   # EUCD: frames to block steering on direction change (servo ignores otherwise)
-  DEADZONE = 0.2  # deg: hold previous direction inside deadzone to avoid unwind
-
-  ACCEL_MIN = -4.0  # m/s^2
-  ACCEL_MAX = 2.0   # m/s^2
+  STEER_TIMEOUT = 30 / DT_CTRL  # frames of 0-torque EPS before steer fault
+  BLOCK_LEN = 8                  # EUCD: frames to block steering on direction change
+  DEADZONE = 0.2                 # deg: hold previous direction inside deadzone
+  ACCEL_MIN = -4.0               # m/s²
+  ACCEL_MAX = 2.0                # m/s²
 
   def __init__(self, CP):
-    can_define = CANDefine(DBC[CP.carFingerprint][Bus.pt])
+    pass  # CP currently unused; kept for API compatibility
+
 
 class CANBUS:
   pt = 0
-  body = 1  # aux bus — carries Delphi ESR 2.5 radar (0x500..0x53F) and CEM dynamics
+  body = 1  # aux bus (Delphi ESR 2.5 radar at 0x500..0x53F + CEM dynamics)
   cam = 2
 
 
-# Delphi ESR 2.5 on aux bus (0x500–0x53F, 20Hz, 64 tracks); read directly so planner sees leads independently of stock FSM
-RADAR_ESR = "ESR"
+RADAR_ESR = "ESR"  # Delphi ESR 2.5 — 64 tracks @ 20Hz on aux bus
 
 @dataclass
 class VolvoEUCDPlatformConfig(PlatformConfig):

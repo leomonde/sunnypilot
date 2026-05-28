@@ -18,7 +18,7 @@ class CarState(CarStateBase):
     self._cruise_speed_prev_kph = 0
     self._pending_delta = 0
     self._icbm_suppress_frames = 0
-    self._custom_acc_step = 1  # set by carcontroller each frame; default 1 km/h
+    self._custom_acc_step = 1  # km/h (carcontroller refresh)
 
   def update(self, can_parsers) -> structs.CarState:
     pt_cp = can_parsers[Bus.pt]
@@ -54,12 +54,9 @@ class CarState(CarStateBase):
     ret.cruiseState.speedCluster = ret.cruiseState.speed
     ret.cruiseState.available = bool(cam_cp.vl["FSM0"]["ACC_Available"])
     ret.cruiseState.enabled = bool(cam_cp.vl["FSM0"]["ACC_Enabled"])
-    # standstill hold; SNG uses this to time the resume blast (hard-cancel without it, drive 38)
-    ret.cruiseState.standstill = bool(cam_cp.vl["FSM3"]["ACC_Standstill"])
+    ret.cruiseState.standstill = bool(cam_cp.vl["FSM3"]["ACC_Standstill"])  # SNG resume blast timer
     ret.cruiseState.nonAdaptive = False
-    # ACC_FaultFlag = bit 5 of FSM3 byte 7. Stock never sets this (0 in 30k frames of normal
-    # operation); only appears after ECM rejects ACC and enters permanent fault state.
-    # Reliable explicit fault signal — once set, persists until ignition cycle.
+    # ACC_FaultFlag (bit 5 of FSM3 B7): stock never sets; set permanently after ECM rejects ACC.
     self.acc_fault_flag = bool(cam_cp.vl["FSM3"]["ACC_FaultFlag"])
     ret.accFaulted = self.acc_fault_flag
     self.acc_distance = cam_cp.vl["FSM1"]["ACC_Distance"]
@@ -91,10 +88,8 @@ class CarState(CarStateBase):
     ret.leftBlinker = pt_cp.vl["MiscCarInfo"]["TurnSignal"] == 1
     ret.rightBlinker = pt_cp.vl["MiscCarInfo"]["TurnSignal"] == 3
 
-    # synthesize one accelCruise/decelCruise per frame from pending delta so the
-    # non-pcm cruise loop processes each km/h increment individually (breaks after first).
-    # Suppressed for several frames after ICBM sends a button so that ACC speed changes
-    # caused by ICBM itself do not feed back into v_cruise_kph.
+    # Pending delta from cruise speed changes → emit accelCruise/decelCruise events.
+    # Suppressed N frames after ICBM sends a button (avoid feedback into v_cruise_kph).
     cruise_kph_now = round(ret.cruiseState.speed * CV.MS_TO_KPH)
     if self._icbm_suppress_frames > 0:
       self._cruise_speed_prev_kph = cruise_kph_now
@@ -103,11 +98,7 @@ class CarState(CarStateBase):
       self._pending_delta += cruise_kph_now - self._cruise_speed_prev_kph
     self._cruise_speed_prev_kph = cruise_kph_now
 
-    # Emit one event per physical ACC step. The step consumed equals custom_acc_step
-    # so that cruise.py (which multiplies delta by custom_acc_step) produces exactly
-    # one increment per button press. Trigger on any non-zero delta (>= 1) to handle
-    # the sub-step snap case: e.g. Volvo snaps 41→45 (+4 km/h, not 5), which would
-    # never reach the step threshold of 5 and would silently drop the press.
+    # Trigger on |delta|≥1 to catch Volvo's sub-step snaps (ex: 41→45 = +4 km/h, not 5).
     step = max(1, self._custom_acc_step)
     if self._pending_delta >= 1:
       ret.buttonEvents = [structs.CarState.ButtonEvent(pressed=False, type=ButtonType.accelCruise)]

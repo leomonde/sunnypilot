@@ -5,25 +5,15 @@ from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.interfaces import RadarInterfaceBase
 from opendbc.car.volvo.values import CANBUS, DBC
 
-# Delphi ESR 2.5: 64 track slots at 0x500..0x53F, 20Hz each. On V60 EUCD the
-# FLR streams these to the FSM over a private CAN; the comma harness taps that
-# private bus, so the panda exposes the full raw stream on CANBUS.body (bus 1).
-# Verified against rlog 0000003e seg 7: Track 24's range follows stock FSM1
-# ACC_Distance to the meter (3m→4m→6m during red-light takeoff).
+# Delphi ESR 2.5: 64 tracks at 0x500..0x53F, 20Hz, on CANBUS.body. Verified
+# against rlog 0000003e seg 7 (Track 24 follows stock FSM1 ACC_Distance to the meter).
 DELPHI_ESR_TRACK_ADDRS = list(range(0x500, 0x540))  # Target1..Target64
 DELPHI_ESR_TRACK_NAMES = [f"Target{i}" for i in range(1, 65)]
-# Pair (addr, name) so we can key state by address (what CANParser reports in
-# its update-returns-set) and still read signals by message name via vl[name].
 TRACK_ADDR_NAMES = list(zip(DELPHI_ESR_TRACK_ADDRS, DELPHI_ESR_TRACK_NAMES, strict=True))
 TRIGGER_MSG_ADDR = DELPHI_ESR_TRACK_ADDRS[-1]
 
-# ESR CAN_TX_TRACK_STATUS codes. 0 = no target. 6 = invalid coasted.
-# Everything else represents a real or recently-real track.
-INVALID_STATUSES = {0, 6}
-
-# A track needs this many consecutive valid frames before we surface it to the
-# planner. Suppresses one-off ghosts without adding meaningful latency (20Hz).
-MIN_VALID_CNT = 3
+INVALID_STATUSES = {0, 6}  # CAN_TX_TRACK_STATUS: 0=no target, 6=invalid coasted
+MIN_VALID_CNT = 3  # consecutive valid frames before surfacing to planner
 
 
 def _create_radar_can_parser(CP) -> CANParser:
@@ -45,8 +35,7 @@ class RadarInterface(RadarInterfaceBase):
 
     self.updated_messages.update(self.rcp.update(can_strings))
 
-    # ESR sends all 64 slots every 50ms. Wait for the last slot before publishing
-    # so consumers see a full sweep rather than partial updates.
+    # ESR sends 64 slots every 50ms — wait for last slot to publish a full sweep.
     if TRIGGER_MSG_ADDR not in self.updated_messages:
       return None
     self.updated_messages.clear()
@@ -66,20 +55,15 @@ class RadarInterface(RadarInterfaceBase):
       else:
         self.valid_cnt[addr] = max(self.valid_cnt[addr] - 1, 0)
 
-      # Only write track data when the current sweep is valid. When a slot
-      # flickers invalid (rng=0 or status∈{0,6}) but the counter is still
-      # holding up from prior valid frames, keep the last good reading rather
-      # than overwriting it with the "no target" 0s — otherwise garbage points
-      # (dRel=0, vRel saturates to ±81.91) leak to the planner.
+      # Write track only when current sweep is valid (avoid leaking "no target" 0s
+      # that saturate vRel to ±81.91 while counter still holds from prior frames).
       if valid and self.valid_cnt[addr] >= MIN_VALID_CNT:
         if addr not in self.pts:
           self.pts[addr] = structs.RadarData.RadarPoint()
           self.pts[addr].trackId = self.track_id
           self.track_id += 1
         angle_rad = cpt["CAN_TX_TRACK_ANGLE"] * CV.DEG_TO_RAD
-        # openpilot convention: dRel forward from car, yRel left positive.
-        # ESR angle is signed with positive = target to the right of boresight,
-        # so flip the sin() sign to get left-positive yRel.
+        # OP convention: dRel forward, yRel left+. ESR angle is right+, so flip sin().
         self.pts[addr].dRel = rng * cos(angle_rad)
         self.pts[addr].yRel = -rng * sin(angle_rad)
         self.pts[addr].vRel = cpt["CAN_TX_TRACK_RANGE_RATE"]
