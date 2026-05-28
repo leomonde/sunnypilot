@@ -27,6 +27,9 @@ class CarControllerParams:
   DEADZONE = 0.2                 # deg: hold previous direction inside deadzone
   ACCEL_MIN = -4.0               # m/s²
   ACCEL_MAX = 2.0                # m/s²
+  # Phase 1b: suppress OP negative accel within this gap of ACC_Speed target.
+  # Stock relaxes braking near setpoint; OP planner is slower → ECM rejects divergence.
+  ACC_SPEED_COHERENCE_MARGIN = 1.4  # m/s (~5 km/h)
 
   def __init__(self, CP):
     pass  # CP currently unused; kept for API compatibility

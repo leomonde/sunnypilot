@@ -144,6 +144,13 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       )
       op_accel = float(actuators.accel) if op_controls_long else float(CS.stock_FSM3["ACC_AccelerationRequest"])
 
+      # Phase 1b: ACC_Speed coherence guard. When vEgo nears the cruise setpoint, stock
+      # stops requesting brake; OP's planner lags → ECM sees divergence and rejects ACC.
+      if op_controls_long and op_accel < 0:
+        acc_target_ms = CS.out.cruiseState.speed
+        if v_ego_ms >= (acc_target_ms - CarControllerParams.ACC_SPEED_COHERENCE_MARGIN):
+          op_accel = 0.0
+
       # vlc_active hysteresis (enter -0.55, exit -0.40); abaixo de 30 km/h → passthrough.
       if op_controls_long and v_ego_ms >= (30.0 / 3.6):
         if self.vlc_active:
