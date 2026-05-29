@@ -55,11 +55,13 @@ def create_lka_msg(packer, apply_steer: float, steer_direction: int):
   return packer.make_can_msg("FSM2", 0, values)
 
 
-def create_longitudinal(packer, stock_fsm3, accel, acc_check, braking: bool = False):
+def create_longitudinal(packer, stock_fsm3, accel, acc_check, braking: bool = False,
+                        has_real_lead: bool = False):
   # Passthrough stock FSM3, override AccelRequest/ACC_Check, force ACC_FaultFlag=0.
-  # When braking: set bit 6 of byte 0 (= "ACC commanding hydraulic brake" — stock no-lead braking).
+  # bit 6 of byte 0 = "ACC commanding hydraulic brake". With lead: passthrough stock
+  # to stay in stock's brake mode (cruise vs hydraulic). Without lead: OP decides.
   byte_01 = int(stock_fsm3["Byte_01"])
-  if braking:
+  if braking and not has_real_lead:
     byte_01 |= 0b01000   # bit 6 of byte 0 (inside Byte_01 signal which covers bits 7-3)
 
   values = {
@@ -145,16 +147,12 @@ def create_fsm4(packer, stock_fsm4, long_active: bool, accel: float = 0.0,
   # - long_active + nolead: Phase 1 — synthetic no-lead pattern (StatusFlag/B4/LeadSpeed=0).
   # - !long_active:         full passthrough.
   if long_active and has_real_lead:
-    values = {
-      "Radar_Heartbeat":       stock_fsm4["Radar_Heartbeat"],
-      "Radar_StatusFlag":      stock_fsm4["Radar_StatusFlag"],
-      "Radar_LeadVelocityAlt": stock_fsm4["Radar_LeadVelocityAlt"],
-      "ACC_LeadSpeed":         stock_fsm4["ACC_LeadSpeed"],
-      "Byte_4":                stock_fsm4["Byte_4"],
-      "Radar_BrakingMode":     _vlc_fsm4_byte5(accel, v_ego_ms),
-      "Radar_CRC":             stock_fsm4["Radar_CRC"],
-      "Byte_7":                stock_fsm4["Byte_7"],
-    }
+    # With lead: BrakingMode also passthrough — stay in stock's brake actuator mode
+    # (cruise vs hydraulic). OP only modulates AccelRequest magnitude within clamp.
+    values = {s: stock_fsm4[s] for s in (
+      "Radar_Heartbeat", "Radar_StatusFlag", "Radar_LeadVelocityAlt", "ACC_LeadSpeed",
+      "Byte_4", "Radar_BrakingMode", "Radar_CRC", "Byte_7",
+    )}
   elif long_active:
     values = {
       "Radar_Heartbeat":       stock_fsm4["Radar_Heartbeat"],

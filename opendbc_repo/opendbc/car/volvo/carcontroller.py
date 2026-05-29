@@ -209,7 +209,8 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1,
                                              op_controls_long, self.strong_braking, has_real_lead))
       can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3,
-                                                    op_accel, acc_check, self.vlc_active))
+                                                    op_accel, acc_check, self.vlc_active,
+                                                    has_real_lead))
 
     # Refresh custom ACC step every 100 frames; carstate uses it to size pending_delta events.
     if self.frame % 100 == 0:
