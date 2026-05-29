@@ -152,11 +152,14 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       op_controls_long = op_active  # carries OP override into FSM1/3/4 builders
       has_real_lead = stock_has_real_lead
 
-      # Phase 1b: ACC_Speed coherence guard. When vEgo nears the cruise setpoint, stock
-      # stops requesting brake; OP's planner lags → ECM sees divergence and rejects ACC.
+      # Phase 1b: ACC_Speed coherence guard. Suppress OP brake near setpoint ONLY when
+      # stock isn't actively braking — stock_accel is the proxy for lead/AEB dominance.
+      # Stock combines setpoint + lead logic; if it asks for real brake, lead is dominant.
       if op_active and op_accel < 0:
         acc_target_ms = CS.out.cruiseState.speed
-        if v_ego_ms >= (acc_target_ms - CarControllerParams.ACC_SPEED_COHERENCE_MARGIN):
+        near_setpoint = abs(v_ego_ms - acc_target_ms) < CarControllerParams.ACC_SPEED_COHERENCE_MARGIN
+        stock_braking = stock_accel < CarControllerParams.STOCK_BRAKE_DEMAND
+        if near_setpoint and not stock_braking:
           op_accel = 0.0
 
       # vlc_active hysteresis (enter -0.55, exit -0.40); abaixo de 30 km/h → passthrough.

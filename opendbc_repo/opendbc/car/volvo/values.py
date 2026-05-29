@@ -27,9 +27,10 @@ class CarControllerParams:
   DEADZONE = 0.2                 # deg: hold previous direction inside deadzone
   ACCEL_MIN = -4.0               # m/s²
   ACCEL_MAX = 2.0                # m/s²
-  # Phase 1b: suppress OP negative accel within this gap of ACC_Speed target.
-  # Stock relaxes braking near setpoint; OP planner is slower → ECM rejects divergence.
-  ACC_SPEED_COHERENCE_MARGIN = 1.4  # m/s (~5 km/h)
+  # Phase 1b: suppress OP negative accel near setpoint when stock isn't actively braking.
+  # If stock_accel < STOCK_BRAKE_DEMAND, lead/AEB is dominant → OP must NOT be suppressed.
+  ACC_SPEED_COHERENCE_MARGIN = 1.4  # m/s (~5 km/h around setpoint)
+  STOCK_BRAKE_DEMAND = -0.3         # m/s² — threshold for "stock actively braking"
   # Phase 2: with real lead, clamp OP accel within ±this of stock's accel.
   # Lead data passes through (real), OP only adjusts braking magnitude.
   BRAKE_CLAMP_MARGIN = 0.3  # m/s² — start conservative, raise after validation

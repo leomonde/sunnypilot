@@ -109,11 +109,13 @@ def create_radar(packer, stock_fsm1, long_active: bool, strong_braking: bool = F
   # - !long_active:          passthrough stock.
   if long_active and has_real_lead:
     stock_target = int(stock_fsm1["ACC_TargetState"])
+    # Only amplify strong-brake bit when stock also has it set — avoids
+    # cross-message incoherence (OP says "strong" while stock is relaxing).
+    stock_has_strong = bool(stock_target & 0b100)
     values = {
       "ACC_Distance":    stock_fsm1["ACC_Distance"],
       "ACC_LeadConf":    stock_fsm1["ACC_LeadConf"],
-      # Only ADD strong bit — never strip stock's own bit 2.
-      "ACC_TargetState": stock_target | (0b100 if strong_braking else 0),
+      "ACC_TargetState": stock_target | (0b100 if (strong_braking and stock_has_strong) else 0),
     }
   elif long_active:
     strong_bit = 4 if strong_braking else 0
