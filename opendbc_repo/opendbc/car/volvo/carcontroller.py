@@ -47,6 +47,10 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     # Hysteresis flags (avoid ECM seeing rapid flips around thresholds).
     self.strong_braking = False  # FSM1 TargetState bit 2 — enter -0.40, exit -0.20
     self.vlc_active = False      # FSM3 B0 bit 6 — enter -0.55, exit -0.40
+    # Hysteresis on lead presence: stay in Phase 2 (clamp/passthrough) until BOTH
+    # stock_dist clears AND stock releases TargetState bit 2 (its strong-brake flag).
+    # Prevents cross-msg incoherence when stock lags releasing brake flags after lead loss.
+    self.has_real_lead_state = False
 
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
@@ -139,7 +143,16 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       # accel is clamped within ±BRAKE_CLAMP_MARGIN of stock to avoid ECM rejection.
       # Sign-coherence: when stock is clearly positive (engagement transient, coming off
       # gas, etc.) and OP wants to brake, defer to stock to avoid cross-msg incoherence.
-      stock_has_real_lead = CS.stock_FSM1["ACC_Distance"] < 200
+      stock_dist = CS.stock_FSM1["ACC_Distance"]
+      stock_TS_bit2 = bool(int(CS.stock_FSM1["ACC_TargetState"]) & 0b100)
+      if self.has_real_lead_state:
+        # Stay in Phase 2 until stock both releases distance AND clears strong-brake bit.
+        if stock_dist >= 220 and not stock_TS_bit2:
+          self.has_real_lead_state = False
+      else:
+        if stock_dist < 200:
+          self.has_real_lead_state = True
+      stock_has_real_lead = self.has_real_lead_state
       op_active = self.CP.openpilotLongitudinalControl and CC.longActive
       stock_accel = float(CS.stock_FSM3["ACC_AccelerationRequest"])
       op_planner = float(actuators.accel) if op_active else stock_accel

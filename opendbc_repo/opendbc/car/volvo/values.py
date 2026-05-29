@@ -36,7 +36,7 @@ class CarControllerParams:
   STOCK_POSITIVE_TRANSIENT = 0.1    # m/s² — threshold for "stock clearly positive"
   # Phase 2: with real lead, clamp OP accel within ±this of stock's accel.
   # Lead data passes through (real), OP only adjusts braking magnitude.
-  BRAKE_CLAMP_MARGIN = 0.3  # m/s² — start conservative, raise after validation
+  BRAKE_CLAMP_MARGIN = 0.5  # m/s²
 
   def __init__(self, CP):
     pass  # CP currently unused; kept for API compatibility
