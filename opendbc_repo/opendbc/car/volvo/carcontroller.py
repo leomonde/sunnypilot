@@ -137,19 +137,24 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       # Phase 1 (no lead): OP fully controls — cruise reduction pattern (Distance=255).
       # Phase 2 (with lead): OP overrides brake params but lead data passes through;
       # accel is clamped within ±BRAKE_CLAMP_MARGIN of stock to avoid ECM rejection.
+      # Sign-coherence: when stock is clearly positive (engagement transient, coming off
+      # gas, etc.) and OP wants to brake, defer to stock to avoid cross-msg incoherence.
       stock_has_real_lead = CS.stock_FSM1["ACC_Distance"] < 200
       op_active = self.CP.openpilotLongitudinalControl and CC.longActive
       stock_accel = float(CS.stock_FSM3["ACC_AccelerationRequest"])
-      if op_active:
-        op_accel_raw = float(actuators.accel)
+      op_planner = float(actuators.accel) if op_active else stock_accel
+      sign_mismatch = (stock_accel > CarControllerParams.STOCK_POSITIVE_TRANSIENT
+                       and op_planner < 0)
+      op_controls_long = op_active and not sign_mismatch
+
+      if op_controls_long:
         if stock_has_real_lead:
           op_accel = max(stock_accel - CarControllerParams.BRAKE_CLAMP_MARGIN,
-                         min(op_accel_raw, stock_accel + CarControllerParams.BRAKE_CLAMP_MARGIN))
+                         min(op_planner, stock_accel + CarControllerParams.BRAKE_CLAMP_MARGIN))
         else:
-          op_accel = op_accel_raw
+          op_accel = op_planner  # free authority without lead
       else:
-        op_accel = stock_accel
-      op_controls_long = op_active  # carries OP override into FSM1/3/4 builders
+        op_accel = stock_accel  # passthrough (op inactive or sign-mismatch defer)
       has_real_lead = stock_has_real_lead
 
       # Phase 1b: ACC_Speed coherence guard. Suppress OP brake near setpoint ONLY when

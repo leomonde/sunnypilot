@@ -31,6 +31,9 @@ class CarControllerParams:
   # If stock_accel < STOCK_BRAKE_DEMAND, lead/AEB is dominant → OP must NOT be suppressed.
   ACC_SPEED_COHERENCE_MARGIN = 1.4  # m/s (~5 km/h around setpoint)
   STOCK_BRAKE_DEMAND = -0.3         # m/s² — threshold for "stock actively braking"
+  # Sign-coherence: defer to stock when it's in a clearly positive transient
+  # (engagement, coming off gas) — avoids ECM rejection from cross-msg incoherence.
+  STOCK_POSITIVE_TRANSIENT = 0.1    # m/s² — threshold for "stock clearly positive"
   # Phase 2: with real lead, clamp OP accel within ±this of stock's accel.
   # Lead data passes through (real), OP only adjusts braking magnitude.
   BRAKE_CLAMP_MARGIN = 0.3  # m/s² — start conservative, raise after validation
