@@ -2,13 +2,11 @@ from opendbc.can import CANPacker
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_CTRL
 from opendbc.car import Bus
-from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.lateral import apply_std_steer_angle_limits
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.volvo import volvocan
 from opendbc.car.volvo.values import CarControllerParams, SteerDirection
 from opendbc.sunnypilot.car.volvo.icbm import IntelligentCruiseButtonManagementInterface
-from opendbc.sunnypilot.car.volvo.sla import VolvoSlaController
 
 
 class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterface):
@@ -53,10 +51,6 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     # stock_dist clears AND stock releases TargetState bit 2 (its strong-brake flag).
     # Prevents cross-msg incoherence when stock lags releasing brake flags after lead loss.
     self.has_real_lead_state = False
-
-    # Auto-arming Volvo SLA via ICBM. Driver disarms via double-press (set+/- within 3s).
-    # Reset on next ACC engagement. Coexists with mainline SLA via Phase 2 clamp.
-    self.sla = VolvoSlaController()
 
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
@@ -162,16 +156,21 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       op_active = self.CP.openpilotLongitudinalControl and CC.longActive
       stock_accel = float(CS.stock_FSM3["ACC_AccelerationRequest"])
       op_planner = float(actuators.accel) if op_active else stock_accel
-      sign_mismatch = (stock_accel > CarControllerParams.STOCK_POSITIVE_TRANSIENT
+      # Emergency brake: planner wants strong brake. Bypass clamp + force hydraulic
+      # flags so the car can physically deliver, even if stock isn't engaging it.
+      emergency_brake = op_active and op_planner < CarControllerParams.EMERGENCY_BRAKE_THRESHOLD
+      # Sign coherence: defer to stock only when NOT in emergency.
+      sign_mismatch = (not emergency_brake
+                       and stock_accel > CarControllerParams.STOCK_POSITIVE_TRANSIENT
                        and op_planner < 0)
       op_controls_long = op_active and not sign_mismatch
 
       if op_controls_long:
-        if stock_has_real_lead:
+        if stock_has_real_lead and not emergency_brake:
           op_accel = max(stock_accel - CarControllerParams.BRAKE_CLAMP_MARGIN,
                          min(op_planner, stock_accel + CarControllerParams.BRAKE_CLAMP_MARGIN))
         else:
-          op_accel = op_planner  # free authority without lead
+          op_accel = op_planner  # free authority (no lead OR emergency)
       else:
         op_accel = stock_accel  # passthrough (op inactive or sign-mismatch defer)
       has_real_lead = stock_has_real_lead
@@ -210,7 +209,8 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
 
       can_sends.append(volvocan.create_fsm4(self.packer_pt, CS.stock_FSM4,
                                             op_controls_long, op_accel, v_ego_ms,
-                                            self.strong_braking, has_real_lead))
+                                            self.strong_braking, has_real_lead,
+                                            emergency_brake))
 
     # 50Hz — FSM1 + FSM3
     if long_tx_due:
@@ -226,38 +226,23 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         acc_check = int(CS.stock_FSM3["ACC_Check"])
 
       can_sends.append(volvocan.create_radar(self.packer_pt, CS.stock_FSM1,
-                                             op_controls_long, self.strong_braking, has_real_lead))
+                                             op_controls_long, self.strong_braking, has_real_lead,
+                                             emergency_brake))
       can_sends.append(volvocan.create_longitudinal(self.packer_pt, CS.stock_FSM3,
                                                     op_accel, acc_check, self.vlc_active,
-                                                    has_real_lead))
+                                                    has_real_lead, emergency_brake))
 
     # Refresh custom ACC step every 100 frames; carstate uses it to size pending_delta events.
     if self.frame % 100 == 0:
       self._custom_acc_step = max(1, int(self._params.get("CustomAccShortPressIncrement", return_default=True) or 1))
     CS._custom_acc_step = self._custom_acc_step
 
-    # Intelligent Cruise Button Management
+    # Intelligent Cruise Button Management (handles both manual and SLA-driven presses)
     icbm_sends = IntelligentCruiseButtonManagementInterface.update(self, CC_SP, CS, self.packer_pt, self.frame, self.last_button_frame)
     if icbm_sends:
       CS._pending_delta = 0
       CS._icbm_suppress_frames = 25
     can_sends.extend(icbm_sends)
-
-    # Volvo SLA via ICBM (auto-arm). Skip if ICBM already pressed something this frame.
-    if not icbm_sends:
-      sla_action = self.sla.update(
-        tsr_kph=CS.tsr_speed_kph,
-        setpoint_kph=CS.out.cruiseState.speed * CV.MS_TO_KPH,
-        vEgo_kph=CS.out.vEgoRaw * CV.MS_TO_KPH,
-        acc_on=CS.out.cruiseState.enabled,
-        frame=self.frame,
-      )
-      if sla_action == 'set-':
-        can_sends.append(volvocan.create_button_msg(self.packer_pt, minus=True))
-        CS._icbm_suppress_frames = 25  # mute synthetic event in carstate
-      elif sla_action == 'set+':
-        can_sends.append(volvocan.create_button_msg(self.packer_pt, set_plus=True))
-        CS._icbm_suppress_frames = 25
 
     new_actuators = actuators.as_builder()
     new_actuators.steeringAngleDeg = self.apply_steer_prev

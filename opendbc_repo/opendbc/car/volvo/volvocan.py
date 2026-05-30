@@ -56,12 +56,14 @@ def create_lka_msg(packer, apply_steer: float, steer_direction: int):
 
 
 def create_longitudinal(packer, stock_fsm3, accel, acc_check, braking: bool = False,
-                        has_real_lead: bool = False):
+                        has_real_lead: bool = False, emergency_brake: bool = False):
   # Passthrough stock FSM3, override AccelRequest/ACC_Check, force ACC_FaultFlag=0.
-  # bit 6 of byte 0 = "ACC commanding hydraulic brake". With lead: passthrough stock
-  # to stay in stock's brake mode (cruise vs hydraulic). Without lead: OP decides.
+  # bit 6 of byte 0 = "ACC commanding hydraulic brake".
+  #   - no lead: OP decides based on vlc_active (braking flag)
+  #   - with lead: passthrough stock to stay in its brake mode
+  #   - emergency: force bit 6 ON to engage hydraulic actuator regardless of stock
   byte_01 = int(stock_fsm3["Byte_01"])
-  if braking and not has_real_lead:
+  if (braking and not has_real_lead) or emergency_brake:
     byte_01 |= 0b01000   # bit 6 of byte 0 (inside Byte_01 signal which covers bits 7-3)
 
   values = {
@@ -104,20 +106,22 @@ def _vlc_fsm4_byte5(accel: float, v_ego_ms: float) -> int:
 
 
 def create_radar(packer, stock_fsm1, long_active: bool, strong_braking: bool = False,
-                 has_real_lead: bool = False):
+                 has_real_lead: bool = False, emergency_brake: bool = False):
   # FSM1 modes:
   # - long_active + no lead: Phase 1 — Distance=255/LeadConf=255 (stock cruise reduction).
   # - long_active + lead:    Phase 2 — passthrough lead data; OP only adds TargetState bit 2.
   # - !long_active:          passthrough stock.
+  # Emergency: with lead, force TargetState bit 2 even if stock isn't asserting it.
   if long_active and has_real_lead:
     stock_target = int(stock_fsm1["ACC_TargetState"])
-    # Only amplify strong-brake bit when stock also has it set — avoids
-    # cross-message incoherence (OP says "strong" while stock is relaxing).
+    # Only amplify strong-brake bit when stock also has it set — unless emergency,
+    # in which case OP forces bit 2 to keep all flags consistent for hydraulic braking.
     stock_has_strong = bool(stock_target & 0b100)
+    add_bit2 = (strong_braking and stock_has_strong) or emergency_brake
     values = {
       "ACC_Distance":    stock_fsm1["ACC_Distance"],
       "ACC_LeadConf":    stock_fsm1["ACC_LeadConf"],
-      "ACC_TargetState": stock_target | (0b100 if (strong_braking and stock_has_strong) else 0),
+      "ACC_TargetState": stock_target | (0b100 if add_bit2 else 0),
     }
   elif long_active:
     strong_bit = 4 if strong_braking else 0
@@ -141,11 +145,13 @@ def create_radar(packer, stock_fsm1, long_active: bool, strong_braking: bool = F
 
 def create_fsm4(packer, stock_fsm4, long_active: bool, accel: float = 0.0,
                 v_ego_ms: float = 0.0, strong_braking: bool = False,
-                has_real_lead: bool = False):
+                has_real_lead: bool = False, emergency_brake: bool = False):
   # FSM4 modes (Heartbeat/CRC always passthrough — ECM checks cadence):
   # - long_active + lead:   Phase 2 — passthrough lead fields; OP overrides BrakingMode.
   # - long_active + nolead: Phase 1 — synthetic no-lead pattern (StatusFlag/B4/LeadSpeed=0).
   # - !long_active:         full passthrough.
+  # Emergency: with lead, override BrakingMode to engage hydraulic (F* range) when
+  # OP needs strong brake and stock is still in engine-brake mode.
   if long_active and has_real_lead:
     # With lead: BrakingMode also passthrough — stay in stock's brake actuator mode
     # (cruise vs hydraulic). OP only modulates AccelRequest magnitude within clamp.
@@ -153,6 +159,9 @@ def create_fsm4(packer, stock_fsm4, long_active: bool, accel: float = 0.0,
       "Radar_Heartbeat", "Radar_StatusFlag", "Radar_LeadVelocityAlt", "ACC_LeadSpeed",
       "Byte_4", "Radar_BrakingMode", "Radar_CRC", "Byte_7",
     )}
+    if emergency_brake:
+      # Force hydraulic mode: ECM caliper engages so car can deliver OP's accel.
+      values["Radar_BrakingMode"] = _vlc_fsm4_byte5(accel, v_ego_ms)
   elif long_active:
     values = {
       "Radar_Heartbeat":       stock_fsm4["Radar_Heartbeat"],

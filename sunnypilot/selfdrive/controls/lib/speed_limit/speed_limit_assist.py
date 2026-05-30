@@ -86,7 +86,10 @@ class SpeedLimitAssist:
     self._distance = 0.
     self.state = SpeedLimitAssistState.disabled
     self._state_prev = SpeedLimitAssistState.disabled
-    self.pcm_op_long = CP.openpilotLongitudinalControl and CP.pcmCruise
+    # Volvo: even with oplong active, route SLA through ICBM (button presses with
+    # confirmation window) instead of planner brake. Volvo's ECM rejects planner-driven
+    # brake when setpoint hasn't been lowered — see opendbc/car/volvo Phase 2 notes.
+    self.pcm_op_long = CP.openpilotLongitudinalControl and CP.pcmCruise and CP.brand != "volvo"
 
     self._plus_hold = 0.
     self._minus_hold = 0.
