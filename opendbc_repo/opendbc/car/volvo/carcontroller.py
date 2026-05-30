@@ -2,11 +2,13 @@ from opendbc.can import CANPacker
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_CTRL
 from opendbc.car import Bus
+from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.lateral import apply_std_steer_angle_limits
 from opendbc.car.interfaces import CarControllerBase
 from opendbc.car.volvo import volvocan
 from opendbc.car.volvo.values import CarControllerParams, SteerDirection
 from opendbc.sunnypilot.car.volvo.icbm import IntelligentCruiseButtonManagementInterface
+from opendbc.sunnypilot.car.volvo.sla import VolvoSlaController
 
 
 class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterface):
@@ -51,6 +53,10 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     # stock_dist clears AND stock releases TargetState bit 2 (its strong-brake flag).
     # Prevents cross-msg incoherence when stock lags releasing brake flags after lead loss.
     self.has_real_lead_state = False
+
+    # Auto-arming Volvo SLA via ICBM. Driver disarms via double-press (set+/- within 3s).
+    # Reset on next ACC engagement. Coexists with mainline SLA via Phase 2 clamp.
+    self.sla = VolvoSlaController()
 
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
@@ -236,6 +242,22 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       CS._pending_delta = 0
       CS._icbm_suppress_frames = 25
     can_sends.extend(icbm_sends)
+
+    # Volvo SLA via ICBM (auto-arm). Skip if ICBM already pressed something this frame.
+    if not icbm_sends:
+      sla_action = self.sla.update(
+        tsr_kph=CS.tsr_speed_kph,
+        setpoint_kph=CS.out.cruiseState.speed * CV.MS_TO_KPH,
+        vEgo_kph=CS.out.vEgoRaw * CV.MS_TO_KPH,
+        acc_on=CS.out.cruiseState.enabled,
+        frame=self.frame,
+      )
+      if sla_action == 'set-':
+        can_sends.append(volvocan.create_button_msg(self.packer_pt, minus=True))
+        CS._icbm_suppress_frames = 25  # mute synthetic event in carstate
+      elif sla_action == 'set+':
+        can_sends.append(volvocan.create_button_msg(self.packer_pt, set_plus=True))
+        CS._icbm_suppress_frames = 25
 
     new_actuators = actuators.as_builder()
     new_actuators.steeringAngleDeg = self.apply_steer_prev
