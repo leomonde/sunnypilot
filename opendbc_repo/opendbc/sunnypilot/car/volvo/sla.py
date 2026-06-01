@@ -1,16 +1,15 @@
 """
 Volvo SLA (Speed Limit Assist) — in-opendbc ICBM-style implementation.
 
-Pattern: auto-arm "Setpoint-as-max" with double-press disarm.
-  When ACC is engaged, SLA arms automatically. Driver's setpoint at engagement is
-  captured as driver_max. When TSR detects a sign, SLA presses set- until setpoint
-  matches the limit. When the sign clears or a higher limit appears, SLA presses
-  set+ to restore driver_max.
+Pattern: auto-arm "Drive-at-limit" with single-press disarm.
+  When ACC is engaged, SLA arms automatically. When TSR detects a sign, SLA presses
+  set-/set+ to drive the setpoint to the limit — UP or DOWN. When the sign clears,
+  SLA stops acting (keeps whatever setpoint is current). If the driver presses
+  set+/set- manually, SLA disarms permanently until the next ACC engagement.
 
-  Manual override:
-    - Single press of set+/set- → update driver_max + pause SLA 10s
-    - Two presses within 3s → disarm SLA for the rest of this session
-    - Reset on next ACC engagement (driver disengages + reengages ACC)
+Disarm:
+  - Any manual press by driver → disarm for the rest of this session
+  - Reset on next ACC engagement (driver disengages + reengages ACC)
 
 UI mode respect: only acts when SpeedLimitMode param == 3 (assist). For other
 modes (off/information/warning), SLA tracks state but emits no presses.
@@ -36,17 +35,11 @@ class VolvoSlaController:
   MIN_VEGO_KPH = 30
   # Window after our press where setpoint change is attributed to us, not driver
   OUR_PRESS_SUPPRESS_FRAMES = 25
-  # After a single manual press, pause SLA this long to let the driver settle
-  PAUSE_AFTER_MANUAL_FRAMES = 500
-  # Two manual presses inside this window disarm SLA for the session
-  DOUBLE_PRESS_WINDOW_FRAMES = 150
 
   def __init__(self):
-    self.driver_max_kph = 0
     self.acc_was_on = False
     self.session_disabled = False
     self.last_press_frame = -1000
-    self.last_manual_press_frame = -1000
     self.last_setpoint_kph = 0
 
   def update(self, tsr_kph: float, setpoint_kph: float, vEgo_kph: float,
@@ -56,35 +49,27 @@ class VolvoSlaController:
     sla_mode: SpeedLimitMode param value (0=off, 1=info, 2=warning, 3=assist).
               We only emit presses when assist; other modes track state silently.
     """
-    # Reset on new ACC engagement (still happens even in non-assist modes so
-    # driver_max is captured if user switches modes mid-drive).
+    # Reset on new ACC engagement (rearm even if previously disarmed)
     if acc_on and not self.acc_was_on:
-      self.driver_max_kph = setpoint_kph
       self.session_disabled = False
       self.last_setpoint_kph = setpoint_kph
-      self.last_manual_press_frame = -1000
     self.acc_was_on = acc_on
 
     if not acc_on or self.session_disabled or sla_mode != SLA_MODE_ASSIST:
       self.last_setpoint_kph = setpoint_kph
       return None
 
-    # Manual press detection: setpoint changed outside our press window
+    # Manual press detection: setpoint changed outside our press window → disarm
     if setpoint_kph != self.last_setpoint_kph:
       our_press_recent = (frame - self.last_press_frame) <= self.OUR_PRESS_SUPPRESS_FRAMES
       if not our_press_recent:
-        if frame - self.last_manual_press_frame < self.DOUBLE_PRESS_WINDOW_FRAMES:
-          # Second manual press within 3s → disarm for session
-          self.session_disabled = True
-          self.last_setpoint_kph = setpoint_kph
-          return None
-        # Single press → update driver_max, record press time
-        self.driver_max_kph = setpoint_kph
-        self.last_manual_press_frame = frame
+        self.session_disabled = True
+        self.last_setpoint_kph = setpoint_kph
+        return None
     self.last_setpoint_kph = setpoint_kph
 
-    # Pause after manual override
-    if frame - self.last_manual_press_frame < self.PAUSE_AFTER_MANUAL_FRAMES:
+    # No TSR sign → nothing to do (keep current setpoint, don't restore anything)
+    if tsr_kph <= 0:
       return None
 
     if vEgo_kph < self.MIN_VEGO_KPH:
@@ -93,13 +78,8 @@ class VolvoSlaController:
     if frame - self.last_press_frame < self.PRESS_INTERVAL_FRAMES:
       return None
 
-    # Target = limit (capped at driver_max) when TSR active, else restore driver_max
-    if tsr_kph > 0:
-      target_kph = min(tsr_kph, self.driver_max_kph)
-    else:
-      target_kph = self.driver_max_kph
-
-    diff = target_kph - setpoint_kph
+    # Drive setpoint to TSR limit — UP or DOWN
+    diff = tsr_kph - setpoint_kph
     if diff <= -self.ENGAGE_THRESHOLD_KPH:
       self.last_press_frame = frame
       return 'set-'

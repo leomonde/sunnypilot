@@ -124,7 +124,13 @@ def create_radar(packer, stock_fsm1, long_active: bool, strong_braking: bool = F
       "ACC_TargetState": stock_target | (0b100 if add_bit2 else 0),
     }
   elif long_active:
-    strong_bit = 4 if strong_braking else 0
+    # Phase 1 (no lead): bit 2 active if EITHER OP wants strong-braking OR stock already
+    # asserts it (e.g., stock starts setting bit 2 at -0.30 while OP enters strong at -0.40).
+    # Without the stock-OR, sustained mild braking creates cross-msg bit 2 incoherence.
+    stock_target = int(stock_fsm1["ACC_TargetState"])
+    stock_has_bit2 = bool(stock_target & 0b100)
+    bit2_active = strong_braking or stock_has_bit2 or emergency_brake
+    strong_bit = 4 if bit2_active else 0
     is_header = stock_fsm1["ACC_FrameType"] == 0
     base_target = 0 if is_header else 184
     values = {
