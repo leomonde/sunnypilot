@@ -37,10 +37,12 @@ class CarControllerParams:
   # Phase 2: with real lead, clamp OP accel within ±this of stock's accel.
   # Lead data passes through (real), OP only adjusts braking magnitude.
   BRAKE_CLAMP_MARGIN = 1.0  # m/s²
-  # Emergency brake: when OP planner wants stronger brake than this (raw, pre-clamp),
-  # bypass clamp AND force hydraulic mode (B5=F* + Byte_01 bit 6) even if stock isn't
-  # engaging hydraulic. Accept temporary cross-msg incoherence in safety scenarios.
-  EMERGENCY_BRAKE_THRESHOLD = -1.0  # m/s²
+  # Emergency brake: when OP planner wants stronger brake than this (raw, pre-clamp)
+  # AND stock isn't already braking, bypass clamp + force hydraulic mode. The "stock
+  # not braking" gate avoids worst-case cross-msg incoherence (stock B*, OP F* while
+  # both braking) seen in 000005ff log9 and 00000600 log3.
+  EMERGENCY_BRAKE_THRESHOLD = -2.0  # m/s² — raised from -1.0 (too sensitive)
+  EMERGENCY_STOCK_PASSIVE = -0.2    # m/s² — stock must be above this (not braking)
 
   def __init__(self, CP):
     pass  # CP currently unused; kept for API compatibility

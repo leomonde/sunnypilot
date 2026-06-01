@@ -19,6 +19,7 @@ class CarState(CarStateBase):
     self._pending_delta = 0
     self._icbm_suppress_frames = 0
     self._custom_acc_step = 1  # km/h (carcontroller refresh)
+    self.tsr_speed_kph = 0.0   # populated from FSM5 each update; read by SLA
 
   def update(self, can_parsers) -> structs.CarState:
     pt_cp = can_parsers[Bus.pt]
@@ -117,9 +118,10 @@ class CarState(CarStateBase):
     self.stock_FSM4 = copy.copy(cam_cp.vl["FSM4"])
     self.ACC_Check = cam_cp.vl["FSM3"]["ACC_Check"]
 
-    # TSR speed limit from camera (0 = no sign). Consumed by mainline SLA.
+    # TSR speed limit from camera (0 = no sign). Consumed by mainline SLA + our SLA.
     tsr_raw = cam_cp.vl["FSM5"]["TSR_Speed"]
-    ret_sp.speedLimit = tsr_raw * CV.KPH_TO_MS if tsr_raw > 0 else 0.0
+    self.tsr_speed_kph = float(tsr_raw) if tsr_raw > 0 else 0.0
+    ret_sp.speedLimit = self.tsr_speed_kph * CV.KPH_TO_MS
 
     self.frame += 1
     return ret, ret_sp
