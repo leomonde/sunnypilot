@@ -31,6 +31,8 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     # Custom ACC increment (refreshed every 100 frames); used by carstate to size events.
     self._params = Params()
     self._custom_acc_step = max(1, int(self._params.get("CustomAccShortPressIncrement", return_default=True) or 1))
+    # SpeedLimitMode (UI toggle): 0=off, 1=info, 2=warning, 3=assist. Refreshed every 100 frames.
+    self._sla_mode = int(self._params.get("SpeedLimitMode", return_default=True) or 0)
 
     # SNG
     self.last_resume_frame = 0
@@ -246,6 +248,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     # Refresh custom ACC step every 100 frames; carstate uses it to size pending_delta events.
     if self.frame % 100 == 0:
       self._custom_acc_step = max(1, int(self._params.get("CustomAccShortPressIncrement", return_default=True) or 1))
+      self._sla_mode = int(self._params.get("SpeedLimitMode", return_default=True) or 0)
     CS._custom_acc_step = self._custom_acc_step
 
     # Intelligent Cruise Button Management (only runs when oplong is off; bypassed here)
@@ -263,6 +266,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         vEgo_kph=CS.out.vEgoRaw * CV.MS_TO_KPH,
         acc_on=CS.out.cruiseState.enabled,
         frame=self.frame,
+        sla_mode=self._sla_mode,
       )
       if sla_action == 'set-':
         can_sends.append(volvocan.create_button_msg(self.packer_pt, minus=True))

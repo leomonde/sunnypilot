@@ -12,12 +12,19 @@ Pattern: auto-arm "Setpoint-as-max" with double-press disarm.
     - Two presses within 3s → disarm SLA for the rest of this session
     - Reset on next ACC engagement (driver disengages + reengages ACC)
 
+UI mode respect: only acts when SpeedLimitMode param == 3 (assist). For other
+modes (off/information/warning), SLA tracks state but emits no presses.
+
 Coexistence with mainline sunnypilot SLA:
   Mainline SLA runs the non-pcm_op_long state machine for Volvo (via the
   speed_limit_assist.py one-line patch). Its ICBM stays off because oplong is on,
   so mainline doesn't actually press anything — our SLA does. UI alerts from
   mainline still appear normally.
 """
+
+
+# SpeedLimitMode values from sunnypilot/selfdrive/controls/lib/speed_limit/common.py
+SLA_MODE_ASSIST = 3  # only mode where our SLA emits presses
 
 
 class VolvoSlaController:
@@ -43,9 +50,14 @@ class VolvoSlaController:
     self.last_setpoint_kph = 0
 
   def update(self, tsr_kph: float, setpoint_kph: float, vEgo_kph: float,
-             acc_on: bool, frame: int) -> str | None:
-    """Returns 'set-' | 'set+' | None."""
-    # Reset on new ACC engagement
+             acc_on: bool, frame: int, sla_mode: int) -> str | None:
+    """Returns 'set-' | 'set+' | None.
+
+    sla_mode: SpeedLimitMode param value (0=off, 1=info, 2=warning, 3=assist).
+              We only emit presses when assist; other modes track state silently.
+    """
+    # Reset on new ACC engagement (still happens even in non-assist modes so
+    # driver_max is captured if user switches modes mid-drive).
     if acc_on and not self.acc_was_on:
       self.driver_max_kph = setpoint_kph
       self.session_disabled = False
@@ -53,7 +65,7 @@ class VolvoSlaController:
       self.last_manual_press_frame = -1000
     self.acc_was_on = acc_on
 
-    if not acc_on or self.session_disabled:
+    if not acc_on or self.session_disabled or sla_mode != SLA_MODE_ASSIST:
       self.last_setpoint_kph = setpoint_kph
       return None
 
