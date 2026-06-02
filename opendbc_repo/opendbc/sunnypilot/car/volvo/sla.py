@@ -33,8 +33,10 @@ class VolvoSlaController:
   ENGAGE_THRESHOLD_KPH = 3
   # Min speed for SLA to act at all
   MIN_VEGO_KPH = 30
-  # Window after our press where setpoint change is attributed to us, not driver
-  OUR_PRESS_SUPPRESS_FRAMES = 25
+  # Window after our press where setpoint change is attributed to us, not driver.
+  # Must cover Volvo's full processing latency for the button → ACC_Speed update
+  # (observed up to ~600ms). Too short = SLA falsely disarms on its own presses.
+  OUR_PRESS_SUPPRESS_FRAMES = 80   # 800ms at 100Hz
 
   def __init__(self):
     self.acc_was_on = False
