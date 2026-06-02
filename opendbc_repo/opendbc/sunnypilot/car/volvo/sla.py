@@ -2,10 +2,16 @@
 Volvo SLA (Speed Limit Assist) — in-opendbc ICBM-style implementation.
 
 Pattern: auto-arm "Drive-at-limit" with single-press disarm.
-  When ACC is engaged, SLA arms automatically. When TSR detects a sign, SLA presses
-  set-/set+ to drive the setpoint to the limit — UP or DOWN. When the sign clears,
-  SLA stops acting (keeps whatever setpoint is current). If the driver presses
-  set+/set- manually, SLA disarms permanently until the next ACC engagement.
+  When ACC is engaged, SLA arms automatically. When a speed limit is detected, SLA
+  presses set-/set+ to drive the setpoint to the limit — UP or DOWN. When the limit
+  clears, SLA stops acting (keeps whatever setpoint is current). If the driver
+  presses set+/set- manually, SLA disarms permanently until the next ACC engagement.
+
+Speed limit source:
+  Carcontroller passes mainline's POLICY-RESOLVED speed limit (TSR+map combined per
+  the user's SpeedLimitControlPolicy UI choice: TSR-first / map-first / TSR-only /
+  map-only). Falls back to raw TSR if no resolved value is available. The argument
+  is named `tsr_kph` for backward compat but represents the resolved value.
 
 Disarm:
   - Any manual press by driver → disarm for the rest of this session

@@ -1,3 +1,4 @@
+import cereal.messaging as messaging
 from opendbc.can import CANPacker
 from openpilot.common.params import Params
 from openpilot.common.realtime import DT_CTRL
@@ -58,8 +59,15 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
 
     # Auto-arming Volvo SLA via ICBM. Runs in parallel with mainline SLA (which is
     # neutralized for Volvo+oplong via the speed_limit_assist.py one-line patch).
-    # Driver disarms via double-press (set+/- within 3s). Reset on next ACC engagement.
+    # Driver disarms via single press. Reset on next ACC engagement.
     self.sla = VolvoSlaController()
+    # Subscribe to mainline's policy-resolved speed limit (TSR+map per UI policy:
+    # SpeedLimitControlPolicy param decides TSR-first/map-first/TSR-only/map-only).
+    # Falls back to raw TSR if SubMaster yields nothing (e.g., tests).
+    self._sm_lp = messaging.SubMaster(['longitudinalPlanSP'])
+
+    # Brake jerk limiter state — clamps negative deltas on TX'd op_accel.
+    self.last_op_accel_tx = 0.0
 
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
@@ -198,6 +206,16 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         if near_setpoint and not stock_braking:
           op_accel = 0.0
 
+      # Brake jerk limit: clamp NEGATIVE deltas so brake ramps in progressively.
+      # Releasing brake (positive delta) is free. Fixes step transitions like
+      # +0.96 → -2.04 when emergency activates after Phase 1b suppression
+      # (route 0000060b log 9 t=560.25). Applied at TX rate (~50Hz here).
+      if op_active:
+        dt = self.LONG_TX_PERIOD_NANOS / 1e9  # ~0.02s @ 50Hz
+        max_decrement = CarControllerParams.MAX_BRAKE_JERK * dt
+        op_accel = max(op_accel, self.last_op_accel_tx - max_decrement)
+      self.last_op_accel_tx = op_accel
+
       # vlc_active hysteresis (enter -0.55, exit -0.40); abaixo de 30 km/h → passthrough.
       if op_controls_long and v_ego_ms >= (30.0 / 3.6):
         if self.vlc_active:
@@ -260,8 +278,16 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
 
     # Volvo SLA via ICBM (auto-arm, in-opendbc). Skip if ICBM already pressed this frame.
     if not icbm_sends:
+      # Read mainline's policy-resolved speed limit (TSR+map, ordered by user's
+      # SpeedLimitControlPolicy param in the UI). Falls back to raw TSR if no LP_SP yet.
+      self._sm_lp.update(0)
+      resolved_kph = 0.0
+      if self._sm_lp.seen['longitudinalPlanSP']:
+        resolved_kph = float(self._sm_lp['longitudinalPlanSP'].speedLimit.resolver.speedLimit) * CV.MS_TO_KPH
+      speed_limit_kph = resolved_kph if resolved_kph > 0 else CS.tsr_speed_kph
+
       sla_action = self.sla.update(
-        tsr_kph=CS.tsr_speed_kph,
+        tsr_kph=speed_limit_kph,
         setpoint_kph=CS.out.cruiseState.speed * CV.MS_TO_KPH,
         vEgo_kph=CS.out.vEgoRaw * CV.MS_TO_KPH,
         acc_on=CS.out.cruiseState.enabled,

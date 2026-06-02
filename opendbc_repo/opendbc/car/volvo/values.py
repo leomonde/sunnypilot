@@ -43,6 +43,12 @@ class CarControllerParams:
   # both braking) seen in 000005ff log9 and 00000600 log3.
   EMERGENCY_BRAKE_THRESHOLD = -2.0  # m/s² — raised from -1.0 (too sensitive)
   EMERGENCY_STOCK_PASSIVE = -0.2    # m/s² — stock must be above this (not braking)
+  # Brake jerk limit on the TX'd op_accel — only applied to NEGATIVE deltas
+  # (brake ramping in). Releasing brake is free. Prevents step transitions like
+  # +0.96 → -2.04 in one cycle (observed at 0000060b log 9 t=560.25, caused by
+  # emergency activation while Phase 1b was suppressing). Stock's natural jerk
+  # was ~-3 m/s³; OP can be more aggressive but step transitions feel abrupt.
+  MAX_BRAKE_JERK = 8.0  # m/s³
 
   def __init__(self, CP):
     pass  # CP currently unused; kept for API compatibility
