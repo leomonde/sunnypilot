@@ -113,8 +113,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       lead_moved = CS.acc_distance > self.distance
 
       if at_standstill and self.waiting and lead_moved:
-        # send 25 messages at a time to increases the likelihood of resume being accepted
-        can_sends.extend([volvocan.create_button_msg(self.packer_pt, resume=True)] * 25)
+        can_sends.extend([volvocan.create_button_msg(self.packer_pt, resume=True)] * self.CCP.BUTTON_BURST)
         if self.sng_count == 0:
           self.sng_ack_frames = 25
         self.sng_count += 1

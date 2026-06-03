@@ -30,6 +30,7 @@ class CarControllerParams:
   STEER_TIMEOUT = 30 / DT_CTRL  # frames before steer fault on sustained 0-torque from EPS
   BLOCK_LEN = 8   # EUCD: frames to block steering on direction change (servo ignores otherwise)
   DEADZONE = 0.2  # deg: hold previous direction inside deadzone to avoid unwind
+  BUTTON_BURST = 10  # CAN messages per button press to increase ECU acceptance probability
 
   ACCEL_MIN = -4.0  # m/s^2
   ACCEL_MAX = 2.0   # m/s^2

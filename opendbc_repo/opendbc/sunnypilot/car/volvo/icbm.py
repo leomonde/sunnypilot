@@ -9,6 +9,7 @@ from opendbc.car import structs, DT_CTRL
 from opendbc.car.can_definitions import CanData
 from opendbc.car.common.conversions import Conversions as CV
 from opendbc.car.volvo import volvocan
+from opendbc.car.volvo.values import CarControllerParams
 from opendbc.sunnypilot.car.intelligent_cruise_button_management_interface_base import IntelligentCruiseButtonManagementInterfaceBase
 
 SendButtonState = structs.IntelligentCruiseButtonManagement.SendButtonState
@@ -51,7 +52,7 @@ class IntelligentCruiseButtonManagementInterface(IntelligentCruiseButtonManageme
 
     if send != SendButtonState.none:
       if (self.frame - self.last_button_frame) * DT_CTRL > 0.2:
-        can_sends.append(volvocan.create_button_msg(packer, **BUTTONS[send]))
+        can_sends.extend([volvocan.create_button_msg(packer, **BUTTONS[send])] * CarControllerParams.BUTTON_BURST)
         self.last_button_frame = self.frame
 
     return can_sends
