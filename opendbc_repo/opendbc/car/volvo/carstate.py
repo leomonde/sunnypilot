@@ -21,6 +21,15 @@ class CarState(CarStateBase):
     self._custom_acc_step = 1  # km/h (carcontroller refresh)
     self.tsr_speed_kph = 0.0   # populated from FSM5 each update; read by SLA
 
+    # Physical driver CC button edges from the CEM CCButtons frame (bus 0). OP's injected
+    # presses are on the TX side and never appear here, so these are purely driver presses.
+    # Consumed by VolvoSlaController for disarm and re-arm-on-engagement policy.
+    self._cc_set_prev = 0
+    self._cc_minus_prev = 0
+    self._cc_resume_prev = 0
+    self.driver_btn_adjust = False   # rising edge of set+ (ACCSetBtn) or set- (ACCMinusBtn)
+    self.driver_btn_resume = False   # rising edge of resume (ACCResumeBtn)
+
   def update(self, can_parsers) -> structs.CarState:
     pt_cp = can_parsers[Bus.pt]
     cam_cp = can_parsers[Bus.cam]
@@ -123,6 +132,16 @@ class CarState(CarStateBase):
     self.tsr_speed_kph = float(tsr_raw) if tsr_raw > 0 else 0.0
     ret_sp.speedLimit = self.tsr_speed_kph * CV.KPH_TO_MS
 
+    # Physical driver CC button rising edges (CEM frame on bus 0; OP's injected presses
+    # are TX-side and never seen here). Used by our SLA to disarm / pick re-arm behavior.
+    cc_btns = pt_cp.vl["CCButtons"]
+    set_now = int(cc_btns["ACCSetBtn"])
+    minus_now = int(cc_btns["ACCMinusBtn"])
+    resume_now = int(cc_btns["ACCResumeBtn"])
+    self.driver_btn_adjust = bool((set_now and not self._cc_set_prev) or (minus_now and not self._cc_minus_prev))
+    self.driver_btn_resume = bool(resume_now and not self._cc_resume_prev)
+    self._cc_set_prev, self._cc_minus_prev, self._cc_resume_prev = set_now, minus_now, resume_now
+
     self.frame += 1
     return ret, ret_sp
 
@@ -137,7 +156,8 @@ class CarState(CarStateBase):
       ("ACC_Speed", 50),
       ("MiscCarInfo", 25),
       ("Doors", 20),
-      ("SAS0", 100)
+      ("SAS0", 100),
+      ("CCButtons", 50),
     ]
 
     cam_messages = [

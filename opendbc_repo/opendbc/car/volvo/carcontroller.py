@@ -300,6 +300,8 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         acc_on=CS.out.cruiseState.enabled,
         frame=self.frame,
         sla_mode=self._sla_mode,
+        driver_adjust_press=CS.driver_btn_adjust,
+        driver_resume_press=CS.driver_btn_resume,
       )
       if sla_action == 'set-':
         # Burst BUTTON_BURST frames so the ACC registers the press (a single frame is ignored).
