@@ -49,6 +49,11 @@ class CarControllerParams:
   # emergency activation while Phase 1b was suppressing). Stock's natural jerk
   # was ~-3 m/s³; OP can be more aggressive but step transitions feel abrupt.
   MAX_BRAKE_JERK = 8.0  # m/s³
+  # Number of identical CCButtons frames to enqueue per OP button press (resume/set+/set-).
+  # Volvo's ACC ignores a single isolated frame — a real button hold spans ~120 ms (~9
+  # frames at the CEM's 67 Hz), below the ECU's debounce. Bursting raises the odds the ECU
+  # samples a "pressed" state. Bump to 15/20/25 if presses are missed (resume proven at 25).
+  BUTTON_BURST = 10
 
   def __init__(self, CP):
     pass  # CP currently unused; kept for API compatibility

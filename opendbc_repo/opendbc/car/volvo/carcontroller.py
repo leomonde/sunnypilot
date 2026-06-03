@@ -11,13 +11,6 @@ from opendbc.car.volvo.values import CarControllerParams, SteerDirection
 from opendbc.sunnypilot.car.volvo.icbm import IntelligentCruiseButtonManagementInterface
 from opendbc.sunnypilot.car.volvo.sla import VolvoSlaController
 
-# Number of identical CCButtons frames to enqueue per press. Volvo's ACC ignores a
-# single isolated frame — a real button hold spans ~120 ms (~9 frames at the CEM's
-# 67 Hz), so one frame falls below the ECU's debounce. Bursting raises the odds the
-# ECU samples a "pressed" state. Used for every OP button command (resume, set+, set-).
-# Bump to 15/20/25 if presses are still missed (SNG resume was proven at 25, drive 060d).
-BUTTON_BURST = 10
-
 
 class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterface):
   def __init__(self, dbc_names, CP, CP_SP):
@@ -147,7 +140,7 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
 
       if at_standstill and self.waiting and lead_moved:
         # Burst BUTTON_BURST identical frames to increase the likelihood of resume being accepted.
-        can_sends.extend([volvocan.create_button_msg(self.packer_pt, resume=True)] * BUTTON_BURST)
+        can_sends.extend([volvocan.create_button_msg(self.packer_pt, resume=True)] * CarControllerParams.BUTTON_BURST)
         if self.sng_count == 0:
           self.sng_ack_frames = 25
         self.sng_count += 1
@@ -305,10 +298,10 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       )
       if sla_action == 'set-':
         # Burst BUTTON_BURST frames so the ACC registers the press (a single frame is ignored).
-        can_sends.extend([volvocan.create_button_msg(self.packer_pt, minus=True)] * BUTTON_BURST)
+        can_sends.extend([volvocan.create_button_msg(self.packer_pt, minus=True)] * CarControllerParams.BUTTON_BURST)
         CS._icbm_suppress_frames = 25  # mute synthetic event in carstate
       elif sla_action == 'set+':
-        can_sends.extend([volvocan.create_button_msg(self.packer_pt, set_plus=True)] * BUTTON_BURST)
+        can_sends.extend([volvocan.create_button_msg(self.packer_pt, set_plus=True)] * CarControllerParams.BUTTON_BURST)
         CS._icbm_suppress_frames = 25
 
     new_actuators = actuators.as_builder()
