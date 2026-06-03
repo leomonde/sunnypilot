@@ -52,8 +52,17 @@ class CarControllerParams:
   # Number of identical CCButtons frames to enqueue per OP button press (resume/set+/set-).
   # Volvo's ACC ignores a single isolated frame — a real button hold spans ~120 ms (~9
   # frames at the CEM's 67 Hz), below the ECU's debounce. Bursting raises the odds the ECU
-  # samples a "pressed" state. Bump to 15/20/25 if presses are missed (resume proven at 25).
-  BUTTON_BURST = 10
+  # samples a "pressed" state. 10 was marginal (drive 0619 log3: set+ mostly not registered,
+  # setpoint stuck despite continuous presses); raised to 15. Bump to 20/25 if still missed.
+  BUTTON_BURST = 15
+
+  # Setpoint-drop softening. A fast setpoint drop (e.g. SLA set-) while the car is still
+  # well above the new setpoint, combined with an aggressive OP brake, is rejected by the
+  # ECM (pcmDisable → cruise fault, drive 0614 log1: setpoint 110→95 + op_accel -0.86 →
+  # pcmDisable). While the setpoint is still settling and there's no real lead / emergency,
+  # cap braking so the car coasts down gently instead of out-braking the stock ACC.
+  SETPOINT_TRANSITION_BRAKE = -0.3   # m/s² — gentlest decel cap during the window
+  SETPOINT_TRANSITION_HOLD = 150     # frames (~1.5 s @ 100 Hz) after the last setpoint drop
 
   def __init__(self, CP):
     pass  # CP currently unused; kept for API compatibility

@@ -69,6 +69,12 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
     # Brake jerk limiter state — clamps negative deltas on TX'd op_accel.
     self.last_op_accel_tx = 0.0
 
+    # Setpoint-drop softening: soften OP braking right after the setpoint is lowered
+    # (e.g. SLA set-) to avoid the ECM rejecting ACC (pcmDisable) on a fast-dropping
+    # setpoint + hard brake while the car is still well above the new setpoint.
+    self._setpoint_kph_prev = 0.0
+    self._setpoint_drop_frame = -100000
+
   def update(self, CC, CC_SP, CS, now_nanos):
     can_sends = []
 
@@ -195,6 +201,19 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       else:
         op_accel = stock_accel  # passthrough (op inactive or sign-mismatch defer)
       has_real_lead = stock_has_real_lead
+
+      # Setpoint-drop softening: when the cruise setpoint was just lowered (e.g. SLA set-),
+      # a large speed-vs-setpoint gap combined with an aggressive OP brake makes the ECM
+      # reject ACC (pcmDisable → cruise fault, drive 0614 log1). While the setpoint is still
+      # settling and there's no real lead / emergency, cap braking so the car coasts down
+      # gently instead of out-braking the stock ACC during the transition.
+      setpoint_kph = CS.out.cruiseState.speed * CV.MS_TO_KPH
+      if setpoint_kph < self._setpoint_kph_prev - 0.5:
+        self._setpoint_drop_frame = self.frame
+      self._setpoint_kph_prev = setpoint_kph
+      in_setpoint_transition = (self.frame - self._setpoint_drop_frame) < CarControllerParams.SETPOINT_TRANSITION_HOLD
+      if op_controls_long and not has_real_lead and not emergency_brake and in_setpoint_transition:
+        op_accel = max(op_accel, CarControllerParams.SETPOINT_TRANSITION_BRAKE)
 
       # Phase 1b: ACC_Speed coherence guard. Suppress OP brake near setpoint ONLY when
       # stock isn't actively braking — stock_accel is the proxy for lead/AEB dominance.
