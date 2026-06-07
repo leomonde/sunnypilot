@@ -56,13 +56,14 @@ class CarControllerParams:
   # setpoint stuck despite continuous presses); raised to 15. Bump to 20/25 if still missed.
   BUTTON_BURST = 15
 
-  # Setpoint-drop softening. A fast setpoint drop (e.g. SLA set-) while the car is still
-  # well above the new setpoint, combined with an aggressive OP brake, is rejected by the
-  # ECM (pcmDisable → cruise fault, drive 0614 log1: setpoint 110→95 + op_accel -0.86 →
-  # pcmDisable). While the setpoint is still settling and there's no real lead / emergency,
-  # cap braking so the car coasts down gently instead of out-braking the stock ACC.
-  SETPOINT_TRANSITION_BRAKE = -0.3   # m/s² — gentlest decel cap during the window
-  SETPOINT_TRANSITION_HOLD = 150     # frames (~1.5 s @ 100 Hz) after the last setpoint drop
+  # No-lead (Phase 1) accel coherence clamp. The ECM rejects ACC (pcmDisable → cruise fault)
+  # when OP's injected FSM3 accel diverges too far from the stock ACC's computed accel — in
+  # BOTH directions: over-braking while chasing a dropping setpoint (drive 0614 log1: OP -1.0
+  # vs stock -0.72) and under-braking on a downhill above setpoint (drive 0625 log13: OP -0.36
+  # vs stock -0.56, faulted after ~12 s). Phase 2 (with lead) already tracks stock via
+  # BRAKE_CLAMP_MARGIN; this extends a tighter clamp to the no-lead case. ~0.2 m/s² sustained
+  # divergence faulted, so keep it below that. Loosen if cruise control feels too rigid.
+  NO_LEAD_ACCEL_CLAMP = 0.15  # m/s² — max |op_accel - stock_accel| when no lead / no emergency
 
   def __init__(self, CP):
     pass  # CP currently unused; kept for API compatibility
