@@ -187,19 +187,12 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
       op_controls_long = op_active and not sign_mismatch
 
       if op_controls_long:
-        if emergency_brake:
-          op_accel = op_planner  # emergency: full authority, bypass the stock clamp
-        elif stock_has_real_lead:
+        if stock_has_real_lead and not emergency_brake:
           # Phase 2 (real lead): track stock within ±BRAKE_CLAMP_MARGIN.
           op_accel = max(stock_accel - CarControllerParams.BRAKE_CLAMP_MARGIN,
                          min(op_planner, stock_accel + CarControllerParams.BRAKE_CLAMP_MARGIN))
         else:
-          # Phase 1 (no lead): track stock within ±NO_LEAD_ACCEL_CLAMP. The ECM rejects ACC
-          # (pcmDisable) when OP's accel diverges too far from stock's — over-braking while
-          # chasing a dropping setpoint (0614 log1) OR under-braking on a downhill above
-          # setpoint (0625 log13). Stay close to stock's demand instead of free authority.
-          op_accel = max(stock_accel - CarControllerParams.NO_LEAD_ACCEL_CLAMP,
-                         min(op_planner, stock_accel + CarControllerParams.NO_LEAD_ACCEL_CLAMP))
+          op_accel = op_planner  # free authority (no lead OR emergency); no-lead bounded below
       else:
         op_accel = stock_accel  # passthrough (op inactive or sign-mismatch defer)
       has_real_lead = stock_has_real_lead
@@ -222,6 +215,17 @@ class CarController(CarControllerBase, IntelligentCruiseButtonManagementInterfac
         dt = self.LONG_TX_PERIOD_NANOS / 1e9  # ~0.02s @ 50Hz
         max_decrement = CarControllerParams.MAX_BRAKE_JERK * dt
         op_accel = max(op_accel, self.last_op_accel_tx - max_decrement)
+
+      # No-lead accel coherence clamp — the LAST word on op_accel. The ECM rejects ACC
+      # (pcmDisable) when OP's FSM3 accel diverges too far from stock's, over- OR under-braking
+      # (0614 log1: chasing a dropping setpoint; 0625 log13: downhill above setpoint). Applied
+      # last so neither Phase 1b's near-setpoint zeroing nor the jerk limiter can reintroduce a
+      # gap (0062b log5: Phase 1b zeroed the brake while stock held -0.24 → 0.24 gap → pcmDisable).
+      # Skips emergency (full authority) and the lead case (Phase 2 clamp above governs).
+      if op_controls_long and not has_real_lead and not emergency_brake:
+        op_accel = max(stock_accel - CarControllerParams.NO_LEAD_ACCEL_CLAMP,
+                       min(op_accel, stock_accel + CarControllerParams.NO_LEAD_ACCEL_CLAMP))
+
       self.last_op_accel_tx = op_accel
 
       # vlc_active hysteresis (enter -0.55, exit -0.40); abaixo de 30 km/h → passthrough.
