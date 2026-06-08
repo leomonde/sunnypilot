@@ -36,8 +36,9 @@ class TestVolvoSafety(common.CarSafetyTest, common.AngleSteeringSafetyTest):
     self.safety.init_tests()
 
   def _angle_cmd_msg(self, angle: float, enabled: bool):
-    # LKAAngleReq carries the signed angle; LKASteerDirection doubles as the
-    # actuation-active flag (LEFT=2 if angle > 0 else RIGHT=1, NONE=0 when disabled).
+    # LKAAngleReq carries the signed angle the safety rate-limits. LKASteerDirection is the
+    # car's per-frame actuation gate (set here for realism) but is NOT used by the safety to
+    # decide engagement — it drops to NONE during the anti-windup pause while OP stays engaged.
     direction = (2 if angle > 0 else 1) if enabled else 0
     values = {"LKAAngleReq": angle, "LKASteerDirection": direction}
     return self.packer.make_can_msg_safety("FSM2", self.VOLVO_MAIN_BUS, values)
@@ -66,24 +67,23 @@ class TestVolvoSafety(common.CarSafetyTest, common.AngleSteeringSafetyTest):
     values = {"VehicleSpeed": 0 if speed <= self.STANDSTILL_THRESHOLD else 10}
     return self.packer.make_can_msg_safety("VehicleSpeed1", 0, values)
 
-  # Volvo uses inactive_angle_is_zero: the carcontroller commands LKAAngleReq=0 with
-  # LKASteerDirection=NONE when not steering, so the safety requires a zero angle while
-  # disabled instead of one near the (differently quantized) measurement. The two methods
-  # below mirror AngleSteeringSafetyTest but adjust that inactive-angle expectation.
+  # Volvo gates the angle command on engagement, not on the LKASteerDirection flag (which
+  # drops to NONE mid-control during the anti-windup pause), and uses inactive_angle_is_zero:
+  # while engaged the rate-limited angle is allowed, while disengaged only a zero angle passes.
+  # The two methods below mirror AngleSteeringSafetyTest but adjust those expectations.
   def test_angle_cmd_when_disabled(self):
     for controls_allowed in (True, False):
       self.safety.set_controls_allowed(controls_allowed)
 
-      for steer_control_enabled in (True, False):
-        for angle_meas in np.arange(-90, 91, 10):
-          self._reset_angle_measurement(angle_meas)
+      for angle_meas in np.arange(-90, 91, 10):
+        self._reset_angle_measurement(angle_meas)
 
-          for angle_cmd in np.arange(-90, 91, 10):
-            self._set_prev_desired_angle(angle_cmd)
+        for angle_cmd in np.arange(-90, 91, 10):
+          self._set_prev_desired_angle(angle_cmd)
 
-            # controls_allowed is checked if actuation bit is 1, else the angle must be zero (inactive)
-            should_tx = controls_allowed if steer_control_enabled else angle_cmd == 0
-            self.assertEqual(should_tx, self._tx(self._angle_cmd_msg(angle_cmd, steer_control_enabled)))
+          # engaged: angle (held at prev) is allowed; disengaged: only a zero angle passes
+          should_tx = controls_allowed or (angle_cmd == 0)
+          self.assertEqual(should_tx, self._tx(self._angle_cmd_msg(angle_cmd, True)))
 
   def test_angle_cmd_when_enabled(self):
     # when controls are allowed, angle cmd rate limit is enforced

@@ -105,8 +105,13 @@ static bool volvo_tx_hook(const CANPacket_t *msg) {
     unsigned int angle_raw = ((GET_BYTES(msg, 3, 1) & 0x3FU) << 8) | GET_BYTES(msg, 4, 1);
     int desired_angle = ((int)angle_raw * 4) - 32768;
 
-    // Signal: LKASteerDirection (byte 5 bits [1:0]); 0 = no actuation request.
-    bool steer_control_enabled = (GET_BYTES(msg, 5, 1) & 0x03U) != 0U;
+    // Engagement gates the angle command, NOT the LKASteerDirection flag. OP keeps
+    // commanding a rate-limited LKAAngleReq the whole time it is engaged; the EUCD
+    // servo needs an ~8-frame LKASteerDirection=NONE anti-windup pause on every
+    // left<->right change, during which OP still emits the (non-zero) tracking angle.
+    // Gating on the direction flag would reject those pause frames and reset the
+    // rate-limit anchor, stalling lateral control.
+    bool steer_control_enabled = controls_allowed || controls_allowed_lateral;
 
     if (steer_angle_cmd_checks(desired_angle, steer_control_enabled, VOLVO_STEERING_LIMITS)) {
       violation = true;
