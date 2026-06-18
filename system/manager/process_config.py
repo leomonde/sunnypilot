@@ -200,4 +200,12 @@ if os.path.exists("../../third_party/copyparty/copyparty-sfx.py"):
   copyparty_args += ["-q"]
   procs += [NativeProcess("copyparty-sfx", "third_party/copyparty", ["./copyparty-sfx.py", *copyparty_args], and_(only_offroad, use_copyparty))]
 
+# comma-360-viewer (injected by deploy.sh — safe to remove manually)
+if os.path.exists("/data/comma-360-viewer/server.py"):
+    procs += [
+        NativeProcess("comma_360_viewer", "/data/comma-360-viewer",
+                      ["./run.sh"], only_offroad),
+    ]
+# /comma-360-viewer
+
 managed_processes = {p.name: p for p in procs}
